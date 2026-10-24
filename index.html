@@ -84,6 +84,10 @@
   .box { position: absolute; box-sizing: border-box; z-index: 2; touch-action: none; user-select: none; -webkit-user-select: none; }
   .box.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
   .k-panel { z-index: 0; border-radius: 6px; }
+  .rsz { display: none; position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px; z-index: 4;
+    background: var(--accent); border: 2px solid #fff; border-radius: 3px; box-sizing: border-box; cursor: nwse-resize; }
+  .rsz::after { content: ""; position: absolute; inset: -12px; }
+  body.editing .box.sel > .rsz { display: block; }
   .k-obj {
     background: var(--obj); color: var(--obj-fg); border-radius: 4px;
     border-top: 3px solid var(--obj-edge); border-bottom: 3px solid var(--obj-edge);
@@ -309,6 +313,7 @@
     <p>Nel menu accanto scegli il formato: <b>MP3</b> fa file piccoli, adatti a telefono e consegne; <b>WAV</b> ha la qualità piena ma file molto più grandi.</p>
     <h3>Microfono</h3>
     <p><code>adc~</code> e <code>ezadc~</code> ricevono il suono dal microfono mentre l'audio è acceso. La prima volta il browser chiede il permesso. Usa le cuffie: con gli altoparlanti il suono rientra nel microfono e fischia.</p>
+    <p>Per registrare il microfono senza sentirlo in cuffia (il ritardo disturba mentre suoni): collega <code>adc~</code> a <code>sfrecord~</code> e non a <code>dac~</code>. Poi manda <code>open</code>, <code>1</code> per partire e <code>0</code> per fermare: il file WAV va nei download. Con <code>open mp3</code> il file è un MP3, più piccolo.</p>
     <h3>File audio</h3>
     <p>Per suonare un file audio usa <code>sfplay~</code> (<code>sfplay~ 2</code> per un file stereo). Collegagli i messaggi <code>open</code> per scegliere il file, <code>1</code> per farlo partire e <code>0</code> per fermarlo. Il file non resta nella patch: quando la riapri, rifai <code>open</code>.</p>
     <p><code>playlist~</code> mostra i file con la forma d'onda. Per aggiungerli: tocca la playlist~ vuota, manda <code>append</code> o trascinali sopra. Su ogni file: &#9654; suona e ferma, il cerchio attiva il loop, il punto a sinistra si trascina per cambiare l'ordine. Sulla forma d'onda trascina per scegliere la parte da suonare; un clic la toglie e, mentre suona, sposta lì la testina. Tasto destro: Rimuovi. I file restano in questo browser, così la patch li ritrova quando la riapri.</p>
@@ -319,6 +324,7 @@
       <li>Collegare: trascina dall'uscita in basso di un oggetto fino all'ingresso in alto di un altro.</li>
       <li>Spostare: trascina l'oggetto. Cambiare il testo: doppio clic (o doppio tocco) sull'oggetto.</li>
       <li>Eliminare: tocca oggetto o cavo, poi <b>Elimina</b> (o il tasto Canc).</li>
+      <li>Pannello colorato (per raggruppare una parte della patch): nuovo oggetto, scrivi <code>panel</code> e Invio. Per un altro colore crealo scrivendo per esempio <code>panel @bgcolor 0.5 0.8 0.5 0.6</code> (rosso, verde, blu, opacità, da 0 a 1). Per cambiare le dimensioni: tocca il pannello e trascina il quadratino blu nell'angolo in basso a destra.</li>
       <li>Un oggetto con il bordo rosso tratteggiato non esiste qui, oppure il nome è sbagliato.</li>
     </ol>
     <h3>Presentazione</h3>

@@ -1026,7 +1026,7 @@
       }
       if (s === "print") {
         const f = this.file;
-        return this.patch.log(`${this.name}: ` + (f ? `${f.name}, ${f.channels} canali, ${mmss(f.frames / sr)}` : "nessun file") + `, speed ${fmt(this.rate)}, loop ${this.loop}`);
+        return this.patch.log(`${this.name}: ` + (f ? `${f.name}, ${f.channels} ${f.channels === 1 ? "canale" : "canali"}, ${mmss(f.frames / sr)}` : "nessun file") + `, speed ${fmt(this.rate)}, loop ${this.loop}`);
       }
       if (isNum(m)) {
         const v = Math.trunc(m[0]);
@@ -1037,6 +1037,163 @@
       if (!isBang(m)) this.nope(m);
     }
     destroy() { this.dead = true; super.destroy(); }
+  }
+
+  // sfrecord~ [channels] [buffer size]: records its signal inlets (one
+  // channel each) to a WAV file; in the browser the file goes to the
+  // downloads when it is closed. open [format] [name] opens a file (here
+  // always WAV; without a name it gets the date and time); 1 starts, 0 stops
+  // and closes it (a new open is needed before recording again); open mp3
+  // [name] makes an MP3 instead (an addition: Max has no MP3); record ms
+  // stops by itself; loop ms keeps only the most recent ms; samptype sets
+  // the sample format; print. Outlet: elapsed time in ms.
+  const SFREC_TYPES = { int8: [8, 1], int16: [16, 1], int24: [24, 1], int32: [32, 1], float32: [32, 3], float64: [64, 3] };
+  const SFREC_FORMATS = ["aiff", "aif", "wave", "wav", "ogg", "flac", "raw", "mp3"];
+  function stampNow() {
+    const d = new Date(), z = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}-${z(d.getSeconds())}`;
+  }
+  // WAV file from one Float32Array per channel; type is a key of SFREC_TYPES.
+  function wavFile(chans, sampleRate, type) {
+    const [bits, tag] = SFREC_TYPES[type], bytes = bits / 8, nch = chans.length, n = chans[0].length;
+    const dataLen = n * nch * bytes, buf = new ArrayBuffer(44 + dataLen), v = new DataView(buf);
+    const str = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+    str(0, "RIFF"); v.setUint32(4, 36 + dataLen, true); str(8, "WAVE");
+    str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, tag, true); v.setUint16(22, nch, true);
+    v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * nch * bytes, true);
+    v.setUint16(32, nch * bytes, true); v.setUint16(34, bits, true);
+    str(36, "data"); v.setUint32(40, dataLen, true);
+    let o = 44;
+    for (let i = 0; i < n; i++) {
+      for (let c = 0; c < nch; c++) {
+        const x = chans[c][i], y = x > 1 ? 1 : x < -1 ? -1 : x;
+        if (tag === 3) { if (bits === 32) v.setFloat32(o, x, true); else v.setFloat64(o, x, true); }
+        else if (bits === 8) v.setUint8(o, Math.round(y * 127) + 128);
+        else if (bits === 16) v.setInt16(o, Math.round(y * 32767), true);
+        else if (bits === 24) { const k = Math.round(y * 8388607); v.setUint8(o, k & 255); v.setUint8(o + 1, (k >> 8) & 255); v.setUint8(o + 2, (k >> 16) & 255); }
+        else v.setInt32(o, Math.round(y * 2147483647), true);
+        o += bytes;
+      }
+    }
+    return new Blob([buf], { type: "audio/wav" });
+  }
+  class SfRecord extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      const n = a.filter((x) => typeof x === "number");
+      this.ch = Math.max(1, Math.min(8, Math.trunc(n[0] || 1)));
+      this.nin = this.ch;
+      this.sigIn = new Set([...Array(this.ch).keys()]);
+      this.outTypes = ["signal"];
+      const bd = Number(this.attr("bitdepth", 16));
+      this.samptype = [8, 16, 24, 32].includes(bd) ? "int" + bd : "int16";
+      this.file = null;   // name of the open file
+      this.format = "wav";
+      this.recording = false;
+      this.chunks = [];
+      this.enc = null;    // MP3 encoder while recording an MP3
+      this.dsp("pe-sfrec", this.ch, 1, { ch: this.ch });
+    }
+    // MP3 gets the first two channels (one channel is used for both sides).
+    toMp3(k) { this.enc.push(k[0], k.length > 1 ? k[1] : k[0].slice()); }
+    async fromDsp(d) {
+      if (d.chunk) { if (this.enc) this.toMp3(d.chunk); else this.chunks.push(d.chunk); return; }
+      if (!("done" in d)) return;
+      if (this.enc) {
+        const enc = this.enc, name = this.file, secs = (d.done / AC.sampleRate).toFixed(1);
+        this.enc = null;
+        this.recording = false;
+        this.file = null;
+        const blob = await enc.end().catch(() => null);
+        if (!blob) return this.patch.log(`${this.name}: MP3 non riuscito`);
+        return this.patch.saveFile(name, blob, `${this.name}: salvato ${name} (${secs} s).`);
+      }
+      const name = this.file, chunks = this.chunks, frames = d.done;
+      this.chunks = [];
+      this.recording = false;
+      this.file = null; // closed: open again before the next recording
+      const chans = [];
+      for (let c = 0; c < this.ch; c++) {
+        const o = new Float32Array(frames);
+        let off = 0;
+        for (const k of chunks) { const part = k[c].subarray(0, Math.min(k[c].length, frames - off)); o.set(part, off); off += part.length; }
+        chans.push(o);
+      }
+      const secs = (frames / AC.sampleRate).toFixed(1);
+      this.patch.saveFile(name, wavFile(chans, AC.sampleRate, this.samptype), `${this.name}: salvato ${name} (${secs} s).`);
+    }
+    async start(msg) {
+      if (!this.file) return this.patch.log(`${this.name}: nessun file aperto: manda prima open`);
+      if (this.recording) return;
+      this.recording = true;
+      this.chunks = [];
+      if (this.format === "mp3") {
+        // the encoder must be ready before the first chunk arrives
+        this.starting = true;
+        const enc = [32000, 44100, 48000].includes(AC.sampleRate) ? await this.patch.mp3Encoder(AC.sampleRate) : null;
+        this.starting = false;
+        if (this.dead || this.abort) {
+          // stopped (0) while the encoder was getting ready: nothing recorded
+          if (enc) enc.cancel();
+          this.abort = false;
+          this.recording = false;
+          this.file = null;
+          return;
+        }
+        if (enc) {
+          this.enc = enc;
+          if (this.ch > 2) this.patch.log(`${this.name}: l'MP3 ha al massimo 2 canali: registro i primi due`);
+        } else {
+          this.format = "wav";
+          this.file = this.file.replace(/\.mp3$/i, ".wav");
+          this.patch.log(`${this.name}: MP3 non disponibile qui: registro in WAV (${this.file})`);
+        }
+      }
+      this.post(msg);
+    }
+    receive(i, m) {
+      if (i > 0) return this.nope(m);
+      const s = sel(m), args = m.slice(1), sr = AC.sampleRate;
+      if (isNum(m)) {
+        if (m[0] !== 0) return this.start({ rec: { frames: 0 } });
+        if (this.starting) { this.abort = true; return; }
+        if (this.recording) return this.post({ stop: 1 });
+        this.file = null; // opened but not recorded: just close it
+        return;
+      }
+      if (s === "open") {
+        let rest = args.slice();
+        this.format = "wav";
+        if (typeof rest[0] === "string" && SFREC_FORMATS.includes(rest[0].toLowerCase())) {
+          const f = rest.shift().toLowerCase();
+          if (f === "mp3") this.format = "mp3";
+          else if (f !== "wave" && f !== "wav") this.patch.log(`${this.name}: qui si registra solo in WAV o MP3: registro in WAV`);
+        }
+        let name = rest.length ? rest.map(String).join(" ") : `sfrecord_${stampNow()}`;
+        name = name.replace(/\.(aiff?|wave?|ogg|flac|raw|mp3)$/i, "") + "." + this.format;
+        if (this.recording) this.post({ stop: 1 });
+        this.file = name;
+        return;
+      }
+      if (s === "record") return this.start({ rec: { frames: num(args) * sr / 1000 } });
+      if (s === "loop") return this.start({ loop: { frames: num(args) * sr / 1000 } });
+      if (s === "samptype") {
+        const t = String(args[0] || "").toLowerCase();
+        if (SFREC_TYPES[t]) { this.samptype = t; return; }
+        return this.patch.log(`${this.name}: samptype ${t}: qui non c'è (int8, int16, int24, int32, float32, float64)`);
+      }
+      if (s === "print") {
+        const st = this.recording ? "sta registrando" : this.file ? "file aperto" : "nessun file aperto";
+        return this.patch.log(`${this.name}: ${st}${this.file ? " (" + this.file + ")" : ""}, ${this.ch} ${this.ch === 1 ? "canale" : "canali"}, ${this.format === "mp3" ? "mp3" : this.samptype}`);
+      }
+      if (!isBang(m)) this.nope(m);
+    }
+    destroy() {
+      this.dead = true;
+      if (this.enc) { this.enc.cancel(); this.enc = null; }
+      if (this.recording) this.post({ stop: 1 });
+      super.destroy();
+    }
   }
 
   // Objects that exist only with the full audio (worklet.js).
@@ -2674,6 +2831,7 @@
     "clip~": (p, b, a) => (WK ? new ClipSig(p, b, a) : new NeedsWorklet(p, b, a)),
     "limi~": (p, b, a) => (WK ? new Limi(p, b, a) : new NeedsWorklet(p, b, a)),
     "sfplay~": (p, b, a) => (WK ? new Sfplay(p, b, a) : new NeedsWorklet(p, b, a)),
+    "sfrecord~": (p, b, a) => (WK ? new SfRecord(p, b, a) : new NeedsWorklet(p, b, a)),
   };
 
   // GUI classes: factory, default size, Max box fields used when the object is created here.
@@ -2696,6 +2854,10 @@
         quality: "basic", timestretch: [0],
       },
     },
+    "panel": {
+      make: (p, b, a) => new Panel(p, b, a), size: [128, 128], io: [1, []],
+      extra: { angle: 270.0, background: 1, bgcolor: [0.5, 0.55, 0.75, 0.35], mode: 0, proportion: 0.5 },
+    },
     "scope~": { make: (p, b, a) => new AnScope(p, b, a), size: [130, 130], io: [2, []], extra: {} },
     "live.scope~": { make: (p, b, a) => new LiveScope(p, b, a), size: [140, 70], io: [2, ["bang"]], extra: {} },
     "live.gain~": {
@@ -2711,7 +2873,6 @@
   const OTHER = {
     "message": (p, b, a) => new Message(p, b, a),
     "comment": (p, b, a) => new Comment(p, b, a),
-    "panel": (p, b, a) => new Panel(p, b, a),
   };
 
   function instantiate(patch, box) {
@@ -2771,6 +2932,10 @@
     askNumber(inst, cb) { if (this.hooks.askNumber) this.hooks.askNumber(inst, cb); }
     // Lets the user choose a sound file, then calls cb(file).
     pickAudio(inst, cb) { if (this.hooks.pickAudio) this.hooks.pickAudio(inst, cb); }
+    // Gives a file to the user (download), then logs msg.
+    saveFile(name, blob, msg) { if (this.hooks.saveFile) this.hooks.saveFile(name, blob, msg); }
+    // Resolves an MP3 encoder { push(L, R), end(), cancel() }, or null.
+    mp3Encoder(sampleRate) { return this.hooks.mp3Encoder ? this.hooks.mp3Encoder(sampleRate).catch(() => null) : Promise.resolve(null); }
     hasCord(id, outlet) { return this.lines.some((l) => l.src[0] === id && l.src[1] === outlet); }
 
     // Message to every [receive name]; "dsp start/stop" switches audio, as in Max.

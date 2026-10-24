@@ -51,6 +51,8 @@
     audio: (on) => setAudio(on),
     askNumber: (inst, cb) => askNumber(inst, cb),
     pickAudio: (inst, cb) => pickAudio(inst, cb),
+    saveFile: (name, blob, msg) => saveFile(name, blob, msg),
+    mp3Encoder: (sampleRate) => mp3Encoder(sampleRate),
   });
 
   // ------------------------------------------------------------ audio on/off
@@ -436,6 +438,9 @@
       el.style.minHeight = r[3] + "px";
     } else if (b.maxclass === "panel") {
       el.style.background = rgba(b.bgcolor);
+      const h = document.createElement("div");
+      h.className = "rsz";
+      el.append(h);
     } else {
       inst.build(el);
     }
@@ -791,7 +796,15 @@
       if (locked) return;
       ev.preventDefault();
       if (outEl) { startCord(ev, id, Number(outEl.dataset.o)); return; }
-      if (isDoubleTap(ev, id) && hasText(e)) { editText(e, false); return; }
+      if (ev.target.closest(".rsz")) { startResize(ev, id, pt); return; }
+      const dbl = isDoubleTap(ev, id);
+      // a panel is background: a tap inside it also sets where new objects go
+      if (e.box.maxclass === "panel") {
+        insertion = { x: Math.round(pt.x), y: Math.round(pt.y) };
+        placeMarker();
+        if (dbl) { newBox("newobj", insertion); return; }
+      }
+      if (dbl && hasText(e)) { editText(e, false); return; }
       if (ev.shiftKey) {
         const s = new Set(selection);
         if (s.has(id)) s.delete(id); else s.add(id);
@@ -871,6 +884,24 @@
           const el = els.get(id);
           el.style.left = r[0] + "px"; el.style.top = r[1] + "px";
         }
+        renderCords();
+      },
+      up() { if (moved) { applyZoom(); scheduleAutosave(); } },
+    });
+  }
+
+  // Drag the corner handle of a selected panel to change its size.
+  function startResize(ev, id, pt0) {
+    const e = patch.entries.get(id), r = rectOf(e), el = els.get(id);
+    const w0 = r[2], h0 = r[3];
+    let moved = false;
+    startDrag(ev, {
+      move(e2, pt) {
+        const dw = Math.round(pt.x - pt0.x), dh = Math.round(pt.y - pt0.y);
+        if (!moved && Math.abs(dw) + Math.abs(dh) < 2) return;
+        if (!moved) { pushUndo(); moved = true; }
+        r[2] = Math.max(16, w0 + dw); r[3] = Math.max(16, h0 + dh);
+        el.style.width = r[2] + "px"; el.style.height = r[3] + "px";
         renderCords();
       },
       up() { if (moved) { applyZoom(); scheduleAutosave(); } },

@@ -785,6 +785,94 @@ class Playlist extends Base {
   }
 }
 
+// ------------------------------------------------------------ sfrecord~
+// Records its inputs (one channel per inlet) for the page, which writes the
+// file. Messages: {rec: {frames}} starts (0 frames = until stop), {loop:
+// {frames}} keeps only the most recent frames, {stop} ends. Posts {chunk:
+// [Float32Array per channel]} while recording (the loop content at the end),
+// then {done: frames}. Output: elapsed time in ms, which stays at the length
+// of the last recording once it stops.
+class SfRecord extends Base {
+  constructor(o) {
+    super(o);
+    this.nch = Math.max(1, this.p.ch | 0);
+    this.mode = 0; // 0 idle, 1 recording, 2 loop recording
+    this.chunk = 16384;
+    this.elapsed = 0;
+    this.count = 0;
+  }
+  newBufs() {
+    this.bufs = [];
+    for (let c = 0; c < this.nch; c++) this.bufs.push(new Float32Array(this.chunk));
+    this.n = 0;
+  }
+  flush() {
+    if (!this.n) return;
+    const out = this.bufs.map((b) => b.slice(0, this.n));
+    this.port.postMessage({ chunk: out }, out.map((x) => x.buffer));
+    this.n = 0;
+  }
+  msg(d) {
+    if (d.rec) {
+      this.mode = 1;
+      this.limit = Math.max(0, Math.floor(d.rec.frames || 0));
+      this.count = 0;
+      this.newBufs();
+    }
+    if (d.loop) {
+      this.mode = 2;
+      this.len = Math.max(1, Math.floor(d.loop.frames || 1));
+      this.ring = [];
+      for (let c = 0; c < this.nch; c++) this.ring.push(new Float32Array(this.len));
+      this.w = 0;
+      this.count = 0;
+    }
+    if (d.stop) this.finish();
+  }
+  finish() {
+    let frames = this.count;
+    if (this.mode === 1) {
+      this.flush();
+    } else if (this.mode === 2) {
+      // oldest sample first
+      const n = Math.min(this.count, this.len), start = this.count > this.len ? this.w : 0;
+      const out = this.ring.map((r) => {
+        const o = new Float32Array(n);
+        for (let i = 0; i < n; i++) o[i] = r[(start + i) % this.len];
+        return o;
+      });
+      this.port.postMessage({ chunk: out }, out.map((x) => x.buffer));
+      frames = n;
+      this.ring = null;
+    } else {
+      return;
+    }
+    this.mode = 0;
+    this.elapsed = frames * 1000 / sampleRate;
+    this.port.postMessage({ done: frames });
+  }
+  process(inputs, outputs) {
+    const out = outputs[0][0], n = out.length, ms = 1000 / sampleRate;
+    if (!this.mode) { out.fill(this.elapsed); return this.alive; }
+    const ins = [];
+    for (let c = 0; c < this.nch; c++) ins.push(sig(inputs, c));
+    for (let i = 0; i < n; i++) {
+      if (!this.mode) { out[i] = this.elapsed; continue; }
+      if (this.mode === 1) {
+        for (let c = 0; c < this.nch; c++) this.bufs[c][this.n] = ins[c] ? ins[c][i] : 0;
+        if (++this.n >= this.chunk) this.flush();
+      } else {
+        for (let c = 0; c < this.nch; c++) this.ring[c][this.w] = ins[c] ? ins[c][i] : 0;
+        this.w = (this.w + 1) % this.len;
+      }
+      this.count++;
+      out[i] = this.count * ms;
+      if (this.mode === 1 && this.limit && this.count >= this.limit) this.finish();
+    }
+    return this.alive;
+  }
+}
+
 registerProcessor("pe-cycle", Cycle);
 registerProcessor("pe-saw", Saw);
 registerProcessor("pe-rect", Rect);
@@ -801,3 +889,4 @@ registerProcessor("pe-limi", Limiter);
 registerProcessor("pe-rec", Recorder);
 registerProcessor("pe-sfplay", SfPlay);
 registerProcessor("pe-playlist", Playlist);
+registerProcessor("pe-sfrec", SfRecord);

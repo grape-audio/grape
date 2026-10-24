@@ -1,0 +1,344 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+</head><body><title>SWAPL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Arimo:wght@400;700&display=swap">
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: toolbar on top, scrollable patch below, one-line console at the bottom.
+     Single look on purpose: it reproduces a Max patch window, so it ignores dark mode. */
+  :root {
+    --bar: #2b2b2b;
+    --bar-2: #3a3a3a;
+    --bar-fg: #e6e6e6;
+    --bar-dim: #a9a9a9;
+    --accent: #4da3ff;
+    --patch-bg: #e5e5e5;
+    --obj: #333333;
+    --obj-edge: #808080;
+    --obj-fg: #f2f2f2;
+    --msg-top: #474747;
+    --msg-bottom: #383838;
+    --hot: #e1a298;
+    --cold: #b4b4b4;
+    --sig: #c8d65a;
+    --cord: #8c8c8c;
+    --bad: #d9534f;
+    --paper: #f7f7f5;
+    --ink: #1f1f1f;
+    --ui: "Arimo", "Arial", "Liberation Sans", "Helvetica Neue", Helvetica, sans-serif;
+    color-scheme: light;
+  }
+  html, body { height: 100%; }
+  body { background: var(--bar); color: var(--ink); font-family: var(--ui); overflow: hidden; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  /* toolbar */
+  #bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    background: var(--bar); color: var(--bar-fg);
+    padding-block: 6px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    border-bottom: 1px solid #1a1a1a;
+  }
+  #bar .group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #bar .sep { width: 1px; align-self: stretch; background: #444; margin: 0 2px; }
+  #name { font-size: 13px; color: var(--bar-dim); max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tb {
+    min-height: 34px; min-width: 34px; padding: 0 10px; border-radius: 6px;
+    background: var(--bar-2); color: var(--bar-fg); border: 1px solid #4a4a4a;
+    font: 13px var(--ui); cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .tb:hover { background: #454545; }
+  .tb:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .tb svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .tb.on { background: #1f4f80; border-color: var(--accent); }
+  #audio.on { background: #255e2c; border-color: #4caf50; }
+  .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #d9534f; display: inline-block; }
+  #rec.on { background: #6b1f1c; border-color: #d9534f; }
+  select.tb { padding: 0 6px; }
+  .pl-menu { position: absolute; z-index: 6; background: #fff; border: 1px solid #b9b9b4; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.3); padding: 3px; }
+  .pl-menu button { display: block; min-height: 32px; padding: 0 14px; border: 0; background: none; font: 13px var(--ui); color: #a42a26; cursor: pointer; border-radius: 4px; }
+  .pl-menu button:hover { background: #f0e6e5; }
+  select.tb:disabled { opacity: 0.5; cursor: default; }
+  .edit-only { display: none !important; }
+  body.editing .edit-only { display: inline-flex !important; }
+  body.editing #bar .group.edit-only { display: flex !important; }
+
+  /* patch area */
+  #stage { position: relative; flex: 1; overflow: auto; background: var(--patch-bg); touch-action: none; }
+  #sizer { position: relative; }
+  #canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; font-family: var(--ui); }
+  body.editing #canvas { background-image: radial-gradient(#cfcfcf 1px, transparent 1px); background-size: 15px 15px; }
+  #cords { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; z-index: 1; }
+  .cord-hit { stroke: transparent; stroke-width: 12; fill: none; pointer-events: stroke; }
+  body:not(.editing) .cord-hit { pointer-events: none; }
+  .cord-ctl { stroke: var(--cord); stroke-width: 1.4; fill: none; }
+  .cord-sig-base { stroke: #2f2f2f; stroke-width: 3.2; fill: none; }
+  .cord-sig-dash { stroke: var(--sig); stroke-width: 1.6; fill: none; stroke-dasharray: 4 4; }
+  .cord.sel .cord-ctl, .cord.sel .cord-sig-base { stroke: var(--accent); }
+  .cord-temp { stroke: var(--accent); stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+
+  .box { position: absolute; box-sizing: border-box; z-index: 2; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .box.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .k-panel { z-index: 0; border-radius: 6px; }
+  .k-obj {
+    background: var(--obj); color: var(--obj-fg); border-radius: 4px;
+    border-top: 3px solid var(--obj-edge); border-bottom: 3px solid var(--obj-edge);
+    font-size: 12px; padding: 0 5px; white-space: nowrap;
+    display: flex; align-items: center;
+  }
+  .k-obj > span, .k-msg > span { display: block; overflow: hidden; text-overflow: clip; white-space: nowrap; min-width: 0; }
+  .k-obj.bad { border: 1.5px dashed var(--bad); background: #3a2a2a; }
+  .k-obj.empty { min-width: 40px; }
+  .k-msg {
+    background: linear-gradient(var(--msg-top), var(--msg-bottom)); color: #fff; border-radius: 6px;
+    font-size: 12px; padding: 0 7px; white-space: nowrap; display: flex; align-items: center;
+    border: 1px solid #2a2a2a;
+  }
+  .k-msg.on { background: #8a8a8a; }
+  .k-comment { color: #1a1a1a; white-space: pre-wrap; line-height: 1.2; padding: 2px 3px; overflow-wrap: anywhere; }
+  body.editing .k-comment { outline: 1px dotted #9a9a9a; }
+  .k-gui { background: #333; border-radius: 3px; }
+  .k-gui .gui-svg, .k-gui .gui-canvas { border-radius: 3px; }
+
+  .inlet, .outlet { position: absolute; width: 9px; height: 4px; z-index: 3; pointer-events: none; }
+  .inlet { top: -3px; border-radius: 0 0 5px 5px; background: var(--cold); }
+  .inlet.hot { background: var(--hot); }
+  .outlet { bottom: -3px; border-radius: 5px 5px 0 0; background: var(--cold); }
+  .outlet.sig { background: var(--sig); box-shadow: 0 0 0 1px #2f2f2f inset; }
+  body.editing .outlet { pointer-events: auto; cursor: crosshair; height: 7px; bottom: -4px; }
+  body.editing .outlet::after { content: ""; position: absolute; left: -9px; right: -9px; top: -3px; bottom: -10px; }
+  .k-comment .inlet, .k-panel .inlet { display: none; }
+  body.presenting .inlet, body.presenting .outlet { display: none !important; }
+  body.editing .k-comment .inlet, body.editing .k-panel .inlet { display: block; }
+
+  .gui-svg { width: 100%; height: 100%; display: block; }
+  .gui-canvas { width: 100%; height: 100%; display: block; }
+  .dial-ring { stroke: #5a5a5a; stroke-width: 3; fill: none; stroke-linecap: round; }
+  .dial-val { stroke: #c9c9c9; stroke-width: 3; fill: none; stroke-linecap: round; }
+  .dial-needle { stroke: #e6e6e6; stroke-width: 2; stroke-linecap: round; }
+  .mc-number, .mc-flonum { display: flex; align-items: center; gap: 3px; color: #f2f2f2; font-size: 12px; padding: 0 4px; border-top: 3px solid var(--obj-edge); border-bottom: 3px solid var(--obj-edge); border-radius: 4px; }
+  .num-tri { color: #9a9a9a; font-size: 10px; }
+  .mc-toggle .tgl-x { stroke: transparent; stroke-width: 2.5; stroke-linecap: round; }
+  .mc-toggle.on .tgl-x { stroke: #e6e6e6; }
+  .mc-button { display: grid; place-items: center; }
+  .btn-dot { width: 70%; height: 70%; border-radius: 50%; border: 2px solid #8a8a8a; box-sizing: border-box; }
+  .mc-button.on .btn-dot { background: #e6e6e6; }
+  .sl-knob { position: absolute; background: #c9c9c9; }
+  .sl-knob.v { left: 0; right: 0; height: 4px; transform: translateY(50%); }
+  .sl-knob.h { top: 0; bottom: 0; width: 4px; transform: translateX(-50%); }
+  .mc-ezdac\~ .ez-spk { fill: #8a8a8a; stroke: none; }
+  .mc-ezdac\~ .ez-wave { stroke: #8a8a8a; stroke-width: 2; fill: none; }
+  .mc-ezdac\~.on .ez-spk { fill: #e6e6e6; }
+  .mc-ezdac\~.on .ez-wave { stroke: #e6e6e6; }
+  .mc-ezadc\~ .ez-spk { fill: #8a8a8a; stroke: none; }
+  .mc-ezadc\~ .ez-wave { stroke: #8a8a8a; stroke-width: 2; fill: none; stroke-linecap: round; }
+  .mc-ezadc\~.on .ez-spk { fill: #e6e6e6; }
+  .mc-ezadc\~.on .ez-wave { stroke: #e6e6e6; }
+  .mc-live\.gain\~ { background: transparent; overflow: visible; }
+  .lg-label { position: absolute; left: 6px; top: -2px; font-size: 10px; color: #111; white-space: nowrap; }
+  .lg-track { position: absolute; left: 35px; top: 13px; width: 6px; bottom: 16px; background: #282828; }
+  .lg-meter { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: #5fbf4f; }
+  .lg-meter.hot { background: #e2c341; }
+  .lg-thumb { position: absolute; left: 8px; width: 0; height: 0; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-right: 10px solid #c9c9c9; }
+  .lg-db { position: absolute; left: 0; right: 0; bottom: 0; text-align: center; font-size: 10px; color: #111; }
+
+  #editor, .numedit {
+    position: absolute; z-index: 10; font: 16px var(--ui);
+    background: #fff; color: #111; border: 2px solid var(--accent); border-radius: 4px; padding: 0 4px; box-sizing: border-box;
+  }
+  #marker { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; z-index: 4; pointer-events: none; display: none; }
+  #marker::before, #marker::after { content: ""; position: absolute; background: var(--accent); }
+  #marker::before { left: 6px; top: 0; width: 2px; height: 14px; }
+  #marker::after { top: 6px; left: 0; height: 2px; width: 14px; }
+  body.editing #marker.show { display: block; }
+  #rubber { position: absolute; border: 1px dashed var(--accent); background: rgba(77, 163, 255, 0.08); z-index: 5; display: none; }
+
+  /* console */
+  #log {
+    background: var(--bar); color: var(--bar-dim); font: 12px ui-monospace, "DejaVu Sans Mono", monospace;
+    padding-block: 5px; min-height: 18px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    border-top: 1px solid #1a1a1a;
+  }
+  #log.open { white-space: pre-wrap; max-height: 40vh; overflow: auto; }
+
+  /* dialogs */
+  .dlg { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: flex-start; justify-content: center; z-index: 50; overflow: auto;
+    padding-block: max(24px, env(safe-area-inset-top, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .dlg[hidden] { display: none !important; }
+  .card { background: var(--paper); color: var(--ink); border-radius: 10px; width: 100%; max-width: 640px; padding: 18px 20px 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); }
+  .card h2 { margin: 0 0 10px; font-size: 20px; text-wrap: balance; }
+  .card h3 { margin: 18px 0 6px; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: #5b5b5b; }
+  .card p, .card li { font-size: 14px; line-height: 1.5; max-width: 65ch; }
+  .card code { font: 13px ui-monospace, "DejaVu Sans Mono", monospace; background: #e9e9e6; padding: 0 4px; border-radius: 3px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .btn { min-height: 36px; padding: 0 12px; border-radius: 6px; border: 1px solid #b9b9b4; background: #fff; color: #1f1f1f; font: 14px var(--ui); cursor: pointer; }
+  .btn.primary { background: #1f4f80; border-color: #1f4f80; color: #fff; }
+  .btn.danger { color: #a42a26; }
+  .btn:focus-visible, .field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .field { min-height: 36px; padding: 0 10px; border-radius: 6px; border: 1px solid #b9b9b4; font: 14px var(--ui); min-width: 0; flex: 1 1 12em; background: #fff; color: #111; }
+  textarea.field { min-height: 120px; width: 100%; padding: 8px; font: 12px ui-monospace, "DejaVu Sans Mono", monospace; box-sizing: border-box; }
+  .files { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+  .files li { display: flex; gap: 8px; align-items: center; justify-content: space-between; background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 6px 8px; }
+  .files li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .note { font-size: 13px; color: #555; }
+  .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
+  .objlist { columns: 3 9em; font: 13px ui-monospace, "DejaVu Sans Mono", monospace; padding-left: 1em; }
+  @media (max-width: 700px) {
+    #bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    #bar::-webkit-scrollbar { display: none; }
+    #bar .group { flex-wrap: nowrap; }
+    #name { display: none; }
+    .tb { white-space: nowrap; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div id="app">
+  <div id="bar">
+    <div class="group">
+      <button class="tb" id="lock" aria-label="Blocca o sblocca la patch" title="Blocca / sblocca (Cmd+E)">
+        <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path id="lock-shackle" d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span id="lock-label">Bloccata</span>
+      </button>
+      <button class="tb" id="audio" aria-label="Accendi o spegni l'audio" title="Audio on/off">
+        <svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg><span id="audio-label">Audio spento</span>
+      </button>
+      <button class="tb" id="rec" title="Registra l'uscita audio in un file (come Quickrecord di Max)"><span class="rec-dot"></span><span id="rec-label">Registra</span></button>
+      <select class="tb" id="rec-format" aria-label="Formato della registrazione" title="Formato della registrazione">
+        <option value="mp3" selected>MP3</option>
+        <option value="wav">WAV</option>
+      </select>
+      <button class="tb" id="present" title="Presentazione (Cmd/Ctrl+Alt+E)">Presentazione</button>
+      <button class="tb" id="file" title="Apri, salva, copia">File</button>
+      <button class="tb" id="help" aria-label="Come si usa" title="Come si usa">?</button>
+    </div>
+    <div class="sep"></div>
+    <div class="group">
+      <button class="tb" id="zoom-out" aria-label="Riduci">&minus;</button>
+      <button class="tb" id="zoom-fit" title="Adatta allo schermo">Adatta</button>
+      <button class="tb" id="zoom-in" aria-label="Ingrandisci">+</button>
+    </div>
+    <div class="sep edit-only"></div>
+    <div class="group edit-only">
+      <button class="tb" data-new="newobj" title="Nuovo oggetto (N)">Oggetto</button>
+      <button class="tb" data-new="message" title="Nuovo messaggio (M)">Messaggio</button>
+      <button class="tb" data-new="comment" title="Nuovo commento (C)">Commento</button>
+      <button class="tb" data-new="number" title="Number box (I)">Numero</button>
+      <button class="tb" id="to-present" title="Aggiungi o togli dalla presentazione (Cmd/Ctrl+Shift+P)">+ Presentazione</button>
+      <button class="tb" id="dup" title="Duplica (Cmd+D)">Duplica</button>
+      <button class="tb" id="del" title="Elimina (Canc)">Elimina</button>
+      <button class="tb" id="undo" title="Annulla (Cmd+Z)">Annulla</button>
+    </div>
+    <span id="name"></span>
+  </div>
+  <div id="stage">
+    <div id="sizer">
+      <div id="canvas">
+        <svg id="cords"></svg>
+        <div id="marker"></div>
+        <div id="rubber"></div>
+      </div>
+    </div>
+  </div>
+  <div id="log" title="Tocca per vedere tutti i messaggi">Pronto.</div>
+</div>
+
+<datalist id="objnames"></datalist>
+
+<div class="dlg" id="filedlg" hidden>
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="file-title">
+    <h2 id="file-title">File</h2>
+    <div class="row">
+      <button class="btn" id="f-new">Nuova patch vuota</button>
+      <button class="btn" id="f-example">Apri l'esempio simple_monoSynth</button>
+    </div>
+    <h3>Salva in questo browser</h3>
+    <div class="row">
+      <input class="field" id="f-name" type="text" placeholder="Nome della patch" autocomplete="off">
+      <button class="btn primary" id="f-save">Salva</button>
+    </div>
+    <p class="note">Le patch salvate restano solo in questo browser, su questo dispositivo.</p>
+    <label class="row note"><input type="checkbox" id="f-openpres"> Apri questa patch in presentazione</label>
+    <h3>Le tue patch</h3>
+    <ul class="files" id="f-list"></ul>
+    <h3>Consegna e scambio con Max</h3>
+    <div class="row">
+      <button class="btn primary" id="f-download">Scarica .maxpat</button>
+      <button class="btn" id="f-copy">Copia il testo della patch</button>
+      <label class="btn" for="f-upload" style="display:inline-flex;align-items:center">Apri un file .maxpat</label>
+      <input id="f-upload" type="file" accept=".maxpat,.json,application/json,text/plain" hidden>
+    </div>
+    <p class="note">Per consegnare una patch: <b>Scarica .maxpat</b> salva il file nei download, e il file si apre anche in Max. In alternativa copia il testo e incollalo in un messaggio o in un documento.</p>
+    <textarea class="field" id="f-text" placeholder="Incolla qui il testo di una patch (.maxpat) per aprirla" spellcheck="false"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" id="f-open-text">Apri il testo incollato</button>
+      <span class="note" id="f-msg"></span>
+    </div>
+    <div class="close-row"><button class="btn" data-close="filedlg">Chiudi</button></div>
+  </div>
+</div>
+
+<div class="dlg" id="audiodlg" hidden>
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="audio-title">
+    <h2 id="audio-title">Apri un file audio</h2>
+    <p class="note" id="audio-for"></p>
+    <div class="row">
+      <label class="btn primary" for="audio-file" style="display:inline-flex;align-items:center">Scegli il file</label>
+      <input id="audio-file" type="file" accept="audio/*,.wav,.wave,.aif,.aiff,.mp3,.m4a,.aac,.ogg,.oga,.opus,.flac,.caf" hidden>
+    </div>
+    <div class="close-row"><button class="btn" data-close="audiodlg">Annulla</button></div>
+  </div>
+</div>
+
+<div class="dlg" id="helpdlg" hidden>
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <h2 id="help-title">Come si usa</h2>
+    <h3>Suonare</h3>
+    <ol>
+      <li>Premi <b>Audio</b> per accendere l'audio.</li>
+      <li>Con la patch <b>bloccata</b> (lucchetto chiuso) usi gli oggetti: trascini in su o in giù manopole, fader e number box, clicchi i messaggi. Per scrivere un numero: tocca la number box, scrivi il valore e premi Invio.</li>
+      <li>Nell'esempio: alza <code>live.gain~</code>, poi clicca il messaggio <code>1</code> per accendere la nota e <code>0</code> per spegnerla.</li>
+    </ol>
+    <p class="note">Su iPhone, se non senti nulla, disattiva la modalità silenziosa.</p>
+    <h3>Registrare</h3>
+    <p><b>Registra</b> registra quello che arriva a <code>dac~</code>; premi di nuovo (<b>Stop</b>) per finire. Il file, con data e ora nel nome, va nei download. Massimo 10 minuti.</p>
+    <p>Nel menu accanto scegli il formato: <b>MP3</b> fa file piccoli, adatti a telefono e consegne; <b>WAV</b> ha la qualità piena ma file molto più grandi.</p>
+    <h3>Microfono</h3>
+    <p><code>adc~</code> e <code>ezadc~</code> ricevono il suono dal microfono mentre l'audio è acceso. La prima volta il browser chiede il permesso. Usa le cuffie: con gli altoparlanti il suono rientra nel microfono e fischia.</p>
+    <h3>File audio</h3>
+    <p>Per suonare un file audio usa <code>sfplay~</code> (<code>sfplay~ 2</code> per un file stereo). Collegagli i messaggi <code>open</code> per scegliere il file, <code>1</code> per farlo partire e <code>0</code> per fermarlo. Il file non resta nella patch: quando la riapri, rifai <code>open</code>.</p>
+    <p><code>playlist~</code> mostra i file con la forma d'onda. Per aggiungerli: tocca la playlist~ vuota, manda <code>append</code> o trascinali sopra. Su ogni file: &#9654; suona e ferma, il cerchio attiva il loop, il punto a sinistra si trascina per cambiare l'ordine. Sulla forma d'onda trascina per scegliere la parte da suonare; un clic la toglie e, mentre suona, sposta lì la testina. Tasto destro: Rimuovi. I file restano in questo browser, così la patch li ritrova quando la riapri.</p>
+    <h3>Modificare</h3>
+    <ol>
+      <li>Sblocca la patch con il lucchetto (o <code>Cmd+E</code> / <code>Ctrl+E</code>).</li>
+      <li>Nuovo oggetto: tocca un punto vuoto, poi <b>Oggetto</b>. Oppure doppio clic su un punto vuoto, o il tasto <code>N</code>. Scrivi nome e argomenti, come in Max (<code>cycle~ 440</code>), poi Invio.</li>
+      <li>Collegare: trascina dall'uscita in basso di un oggetto fino all'ingresso in alto di un altro.</li>
+      <li>Spostare: trascina l'oggetto. Cambiare il testo: doppio clic (o doppio tocco) sull'oggetto.</li>
+      <li>Eliminare: tocca oggetto o cavo, poi <b>Elimina</b> (o il tasto Canc).</li>
+      <li>Un oggetto con il bordo rosso tratteggiato non esiste qui, oppure il nome è sbagliato.</li>
+    </ol>
+    <h3>Presentazione</h3>
+    <ol>
+      <li><b>Presentazione</b> (o <code>Cmd+Alt+E</code> / <code>Ctrl+Alt+E</code>) mostra solo l'interfaccia, senza cavi; premi di nuovo per tornare alla patch. Il suono non cambia.</li>
+      <li>Per prepararla: sblocca, seleziona gli oggetti e premi <b>+ Presentazione</b> (<b>&minus; Presentazione</b> per toglierli). Poi passa in presentazione e, a patch sbloccata, sposta gli oggetti dove vuoi: la disposizione della patch non cambia.</li>
+      <li>Gli oggetti creati mentre sei in presentazione ci entrano da soli.</li>
+      <li>In <b>File</b>, &ldquo;Apri questa patch in presentazione&rdquo; fa aprire la patch direttamente in presentazione, anche in Max.</li>
+    </ol>
+    <h3>Sul telefono</h3>
+    <p>Un dito sugli oggetti li usa o li sposta; un dito sullo sfondo fa scorrere la patch. Due dita: allargale o stringile per ingrandire o rimpicciolire. Ci sono anche i pulsanti <b>&minus;</b>, <b>+</b> e <b>Adatta</b>.</p>
+    <h3>Oggetti disponibili</h3>
+    <ul class="objlist" id="objlist"></ul>
+    <p class="note">Strumento didattico che imita l'aspetto e i nomi degli oggetti di Max. Non è Max e non ha legami con Cycling '74. Il suono è generato con le funzioni audio del browser, quindi può differire leggermente da quello di Max.</p>
+    <p class="note">La registrazione MP3 usa <a href="https://lame.sourceforge.io" target="_blank" rel="noopener">LAME</a>, nella versione JavaScript lamejs, con licenza LGPL.</p>
+    <div class="close-row"><button class="btn" data-close="helpdlg">Chiudi</button></div>
+  </div>
+</div>
+
+<script src="example.js"></script>
+<script src="engine.js"></script>
+<script src="editor.js"></script>
+</body></html>

@@ -56,9 +56,15 @@
   });
 
   // ------------------------------------------------------------ audio on/off
+  // Chrome restarts a suspended context by itself when a source starts
+  // after a tap or key (creating sig~, +~, noise~...): audio stays off
+  // until the Audio button (or dac~ start) turns it on, as in Max.
+  let audioWanted = false;
   function setAudio(on) {
+    audioWanted = on;
     if (on) AC.resume(); else AC.suspend();
   }
+  AC.addEventListener("statechange", () => { if (AC.state === "running" && !audioWanted) AC.suspend(); });
   function showAudio() {
     const on = AC.state === "running";
     $("#audio").classList.toggle("on", on);

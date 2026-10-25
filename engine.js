@@ -460,11 +460,16 @@
     constructor(p, b, a) { super(p, b, a); this.dest = String(a[0] || ""); this.outTypes = []; }
     receive(i, m) { this.patch.sendTo(this.dest, m); }
   }
+  // receive [name]: as in Max, an inlet (for "set name") only without a name.
   class Receive extends Obj {
     constructor(p, b, a) {
       super(p, b, a);
-      this.nin = 0;
-      this.join(String(a[0] || ""));
+      this.nin = a.length ? 0 : 1;
+      this.join(a.length ? String(a[0]) : "");
+    }
+    receive(i, m) {
+      if (sel(m) === "set") this.join(m.length > 1 ? String(m[1]) : "");
+      else this.nope(m);
     }
     join(name) {
       this.leave();
@@ -474,6 +479,304 @@
     }
     leave() { const s = bus.get(this.rname); if (s) s.delete(this); }
     destroy() { this.leave(); }
+  }
+
+  // gate [outlets] [open]: messages in the right inlet go out the open outlet.
+  // Left inlet: outlet number (0 = closed, no output), next, bang (reports
+  // the open outlet). Below 0 the leftmost outlet, above the count the rightmost.
+  class Gate extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 2;
+      const n = a.length && typeof a[0] === "number" ? Math.max(1, Math.trunc(a[0])) : 1;
+      this.outTypes = new Array(n).fill("");
+      this.open = a.length > 1 && typeof a[1] === "number" ? Math.trunc(a[1]) : 0;
+    }
+    receive(i, m) {
+      const n = this.outTypes.length;
+      if (i === 1) {
+        if (this.open === 0) return;
+        this.out(this.open < 0 ? 0 : Math.min(this.open, n) - 1, m);
+        return;
+      }
+      if (isBang(m)) return this.out(0, [this.open]);
+      if (sel(m) === "next") {
+        const k = this.open < 0 ? 1 : Math.min(this.open, n);
+        this.open = this.open === 0 || k >= n ? 1 : k + 1;
+        return;
+      }
+      if (isNum(m)) { this.open = Math.trunc(m[0]); return; }
+      this.nope(m);
+    }
+  }
+
+  // route [selectors]: if the first item of a message matches an argument,
+  // the rest goes out that outlet (bang if nothing is left); otherwise the
+  // whole message goes out the rightmost outlet. Right inlet: replaces the
+  // first argument.
+  class Route extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 2;
+      this.keys = a.length ? a.slice() : [0];
+      this.outTypes = this.keys.map(() => "").concat([""]);
+    }
+    receive(i, m) {
+      if (i === 1) { if (m.length) this.keys[0] = m[0]; return; }
+      if (!m.length) return;
+      const k = this.keys.findIndex((x) => x === m[0]);
+      if (k < 0) return this.out(this.keys.length, m);
+      const rest = m.slice(1);
+      this.out(k, rest.length ? rest : BANG);
+    }
+  }
+
+  // switch [inlets] [open]: lets through the messages of the open inlet
+  // (0 = none). Left inlet: inlet number (below 0 its absolute value, above
+  // the count the rightmost), next, bang (reports the open inlet).
+  class SwitchCtl extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.n = a.length && typeof a[0] === "number" ? Math.max(1, Math.trunc(a[0])) : 2;
+      this.nin = this.n + 1;
+      this.open = a.length > 1 && typeof a[1] === "number" ? Math.trunc(a[1]) : 0;
+    }
+    current() { return this.open === 0 ? 0 : Math.min(Math.abs(this.open), this.n); }
+    receive(i, m) {
+      if (i > 0) { if (i === this.current()) this.out(0, m); return; }
+      if (isBang(m)) return this.out(0, [this.current()]);
+      if (sel(m) === "next") {
+        const k = this.current();
+        this.open = k === 0 || k >= this.n ? 1 : k + 1;
+        return;
+      }
+      if (isNum(m)) { this.open = Math.trunc(m[0]); return; }
+      this.nope(m);
+    }
+  }
+
+  // change [initial] [+|-]: a number goes out only if it differs from the
+  // previous one. Middle outlet: 1 when going from 0 to non-zero; right
+  // outlet: 1 when going from non-zero to 0. Mode +: 1 when the number
+  // grows; mode -: -1 when it falls. Floats only with a float argument.
+  class Change extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.outTypes = ["", "int", "int"];
+      const word = String(b.text || "").trim().split(/\s+/)[1] || "";
+      this.float = typeof a[0] === "number" && /[.e]/i.test(word);
+      this.v = this.conv(typeof a[0] === "number" ? a[0] : 0);
+      const md = a.find((x) => x === "+" || x === "-");
+      this.mode = md || null;
+    }
+    conv(x) { return this.float ? x : Math.trunc(x); }
+    receive(i, m) {
+      const s = sel(m);
+      if (s === "set") { this.v = this.conv(num(m.slice(1))); return; }
+      if (s === "mode") { this.mode = m[1] === "+" || m[1] === "-" ? m[1] : null; return; }
+      if (isBang(m)) return this.out(0, [this.v]);
+      if (!isNum(m)) return this.nope(m);
+      const x = this.conv(m[0]), old = this.v;
+      this.v = x;
+      if (old !== 0 && x === 0) this.out(2, [1]);
+      if (old === 0 && x !== 0) this.out(1, [1]);
+      if (this.mode === "+") { if (x > old) this.out(0, [1]); }
+      else if (this.mode === "-") { if (x < old) this.out(0, [-1]); }
+      else if (x !== old) this.out(0, [x]);
+    }
+  }
+
+  // scale [in low] [in high] [out low] [out high] [exponent]: maps a range
+  // onto another (default 0 127 0 1). Integer output only with exactly four
+  // integer arguments. classic (default 1): Max's old exponential formula.
+  class Scale extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 6;
+      const n = a.filter((x) => typeof x === "number");
+      this.v = [0, 127, 0, 1, 1].map((d, k) => (k < n.length ? n[k] : d));
+      const toks = String(b.text || "").trim().split(/\s+/).slice(1).filter((t) => t[0] !== "@");
+      this.int = n.length === 4 && toks.length === 4 && toks.every((t) => isNumText(t) && !/[.e]/i.test(t));
+      this.classic = Number(this.attr("classic", 1)) ? 1 : 0;
+      this.last = null;
+    }
+    one(x) {
+      const [il, ih, ol, oh] = this.v;
+      let e = this.v[4], y;
+      if (this.int) x = Math.trunc(x);
+      e = this.classic ? (e < 1 ? 1 : e) : (e < 0 ? 0 : e);
+      if (ih === il) y = ol;
+      else if (e === 1) y = (oh - ol) * (x - il) / (ih - il) + ol;
+      else if (this.classic) {
+        const k = (oh - ol) * Math.exp(-(ih - il) * Math.log(e)) * Math.exp(x * Math.log(e));
+        y = oh - ol >= 0 ? ol + (oh - ol) * k : -(ol + (oh - ol) * k);
+      } else {
+        const t = (x - il) / (ih - il);
+        y = t === 0 ? ol : t > 0 ? ol + (oh - ol) * Math.pow(t, e) : ol + (oh - ol) * -Math.pow(-t, e);
+      }
+      return this.int ? Math.trunc(y) : y;
+    }
+    receive(i, m) {
+      if (sel(m) === "classic") { this.classic = num(m.slice(1)) ? 1 : 0; return; }
+      if (i > 0) { if (isNum(m)) this.v[i - 1] = m[0]; else this.nope(m); return; }
+      if (isBang(m)) { if (this.last) this.out(0, this.last.map((x) => this.one(x))); return; }
+      if (!isNum(m)) return this.nope(m);
+      this.last = m.filter((x) => typeof x === "number");
+      this.out(0, this.last.map((x) => this.one(x)));
+    }
+  }
+
+  // > < >= <= == !=: 1 or 0. Right inlet: the number to compare with. Integer
+  // comparison (floats truncated) unless the argument is a float.
+  class Compare extends Obj {
+    constructor(p, b, a, op) {
+      super(p, b, a);
+      this.op = op;
+      this.nin = 2;
+      this.outTypes = ["int"];
+      const word = String(b.text || "").trim().split(/\s+/)[1] || "";
+      this.float = typeof a[0] === "number" && /[.e]/i.test(word);
+      this.r = this.conv(typeof a[0] === "number" ? a[0] : 0);
+      this.l = 0;
+    }
+    conv(x) { return this.float ? x : Math.trunc(x); }
+    calc() {
+      const l = this.l, r = this.r;
+      const op = this.op;
+      return [+(op === ">" ? l > r : op === "<" ? l < r : op === ">=" ? l >= r : op === "<=" ? l <= r : op === "!=" ? l !== r : l === r)];
+    }
+    receive(i, m) {
+      if (i === 1) { if (isNum(m)) this.r = this.conv(m[0]); else this.nope(m); return; }
+      if (sel(m) === "set") { this.l = this.conv(num(m.slice(1))); return; }
+      if (!isBang(m)) {
+        if (!isNum(m)) return this.nope(m);
+        this.l = this.conv(m[0]);
+        if (m.length > 1 && typeof m[1] === "number") this.r = this.conv(m[1]);
+      }
+      this.out(0, this.calc());
+    }
+  }
+
+  // makenote [velocity] [duration ms] [channel]: note-on now, note-off
+  // (velocity 0) after the duration. Outlets: pitch, velocity (and channel
+  // with three arguments). repeatmode as in Max: 0 poly, 1 re-trigger,
+  // 2 stop last, 3 update duration.
+  class Makenote extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      const n = a.filter((x) => typeof x === "number");
+      this.vel = n.length ? n[0] : 0;
+      this.dur = n.length > 1 ? n[1] : 0;
+      this.hasCh = n.length > 2;
+      this.ch = this.hasCh ? n[2] : 1;
+      this.nin = this.hasCh ? 4 : 3;
+      this.outTypes = this.hasCh ? ["int", "int", "int"] : ["int", "int"];
+      this.mode = Math.trunc(Number(this.attr("repeatmode", 0)) || 0);
+      if (this.attrs.duration) this.dur = num(this.attrs.duration);
+      this.held = [];
+    }
+    emit(pitch, vel, ch) {
+      if (this.hasCh) this.out(2, [ch]);
+      this.out(1, [vel]);
+      this.out(0, [pitch]);
+    }
+    schedule(h) {
+      clearTimeout(h.t);
+      h.t = setTimeout(() => this.off(h), Math.max(0, this.dur));
+    }
+    off(h) {
+      clearTimeout(h.t);
+      const k = this.held.indexOf(h);
+      if (k >= 0) this.held.splice(k, 1);
+      this.emit(h.pitch, 0, h.ch);
+    }
+    note(pitch, vel, ch) {
+      const same = this.held.filter((h) => h.pitch === pitch && h.ch === ch);
+      if (same.length && this.mode === 3) { same.forEach((h) => this.schedule(h)); return; }
+      if (same.length && this.mode === 1) same.forEach((h) => this.off(h));
+      if (same.length && this.mode === 2) same.forEach((h) => { clearTimeout(h.t); this.held.splice(this.held.indexOf(h), 1); });
+      this.emit(pitch, vel, ch);
+      if (this.dur > 0) {
+        const h = { pitch, ch, t: null };
+        this.held.push(h);
+        this.schedule(h);
+      } else this.emit(pitch, 0, ch);
+    }
+    receive(i, m) {
+      const s = sel(m);
+      if (s === "clear") { this.held.forEach((h) => clearTimeout(h.t)); this.held = []; return; }
+      if (s === "stop") { [...this.held].forEach((h) => this.off(h)); return; }
+      if (s === "repeatmode") { this.mode = Math.trunc(num(m.slice(1))); return; }
+      if (s === "duration") { this.dur = num(m.slice(1)); return; }
+      if (isBang(m)) return;
+      if (!isNum(m)) return this.nope(m);
+      if (i === 1) { this.vel = m[0]; return; }
+      if (i === 2) { this.dur = m[0]; return; }
+      if (i === 3) { this.ch = m[0]; return; }
+      if (m.length > 1 && typeof m[1] === "number") this.vel = m[1];
+      if (this.hasCh && m.length > 2 && typeof m[2] === "number") this.ch = m[2];
+      this.note(m[0], this.vel, this.ch);
+    }
+    destroy() { this.held.forEach((h) => clearTimeout(h.t)); this.held = []; }
+  }
+
+  // key: the computer keyboard (not while typing in a box). Outlets, sent
+  // right to left: character code, key code (Mac numbering), modifiers
+  // (128 + 256 Cmd/Ctrl, 512 Shift, 1024 Caps Lock, 2048 Alt/Option,
+  // 4096 Mac Control), platform-independent code (Max's table).
+  const keyObjs = new Set();
+  const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
+  const KEY_INDEP = {
+    " ": -2, Escape: -3, Enter: -4, Tab: -5, Delete: -6, Backspace: -7, Insert: -8,
+    ArrowUp: -9, ArrowDown: -10, ArrowLeft: -11, ArrowRight: -12, PageUp: -13, PageDown: -14, Home: -15, End: -16,
+  };
+  const KEY_PAD = {
+    Numpad0: -33, Numpad1: -34, Numpad2: -35, Numpad3: -36, Numpad4: -37, Numpad5: -38, Numpad6: -39,
+    Numpad7: -40, Numpad8: -41, Numpad9: -42, NumpadAdd: -43, NumpadSubtract: -44, NumpadMultiply: -45,
+    NumpadDivide: -46, NumpadComma: -47, NumpadDecimal: -48, NumpadEqual: -49,
+  };
+  const KEY_CHAR = { Enter: 13, Tab: 9, Backspace: 8, Escape: 27, Delete: 127, ArrowLeft: 28, ArrowRight: 29, ArrowUp: 30, ArrowDown: 31 };
+  const KEY_MAC = {
+    KeyA: 0, KeyS: 1, KeyD: 2, KeyF: 3, KeyH: 4, KeyG: 5, KeyZ: 6, KeyX: 7, KeyC: 8, KeyV: 9, IntlBackslash: 10, KeyB: 11,
+    KeyQ: 12, KeyW: 13, KeyE: 14, KeyR: 15, KeyY: 16, KeyT: 17, Digit1: 18, Digit2: 19, Digit3: 20, Digit4: 21,
+    Digit6: 22, Digit5: 23, Equal: 24, Digit9: 25, Digit7: 26, Minus: 27, Digit8: 28, Digit0: 29, BracketRight: 30,
+    KeyO: 31, KeyU: 32, BracketLeft: 33, KeyI: 34, KeyP: 35, Enter: 36, KeyL: 37, KeyJ: 38, Quote: 39, KeyK: 40,
+    Semicolon: 41, Backslash: 42, Comma: 43, Slash: 44, KeyN: 45, KeyM: 46, Period: 47, Tab: 48, Space: 49,
+    Backquote: 50, Backspace: 51, Escape: 53, ArrowLeft: 123, ArrowRight: 124, ArrowDown: 125, ArrowUp: 126,
+  };
+  window.addEventListener("keydown", (e) => {
+    if (!keyObjs.size) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+    const k = e.key || "";
+    if (["Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph", "Unidentified", "Dead"].includes(k)) return;
+    const ch = k.length === 1 ? k.charCodeAt(0) : (KEY_CHAR[k] || 0);
+    let indep;
+    if (KEY_PAD[e.code] !== undefined) indep = KEY_PAD[e.code];
+    else if (KEY_INDEP[k] !== undefined) indep = KEY_INDEP[k];
+    else if (/^F([1-9]|1[0-6])$/.test(k)) indep = -16 - Number(k.slice(1));
+    else if (/^Key[A-Z]$/.test(e.code)) indep = e.code.charCodeAt(3) + 32;
+    else if (/^Digit[0-9]$/.test(e.code)) indep = e.code.charCodeAt(5);
+    else indep = k.length === 1 ? k.toLowerCase().charCodeAt(0) : -1;
+    const mods = 128 + (IS_MAC ? (e.metaKey ? 256 : 0) + (e.ctrlKey ? 4096 : 0) : (e.ctrlKey ? 256 : 0))
+      + (e.shiftKey ? 512 : 0) + (e.getModifierState && e.getModifierState("CapsLock") ? 1024 : 0) + (e.altKey ? 2048 : 0);
+    const code = KEY_MAC[e.code] !== undefined ? KEY_MAC[e.code] : -1;
+    for (const o of [...keyObjs]) o.fire(ch, code, mods, indep);
+  }, true);
+  class KeyObj extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 0;
+      this.outTypes = ["int", "int", "int", "int"];
+      keyObjs.add(this);
+    }
+    fire(ch, code, mods, indep) {
+      this.out(3, [indep]);
+      this.out(2, [mods]);
+      this.out(1, [code]);
+      this.out(0, [ch]);
+    }
+    destroy() { keyObjs.delete(this); }
   }
 
   class Print extends Obj {
@@ -1197,6 +1500,233 @@
   }
 
   // Objects that exist only with the full audio (worklet.js).
+  // ------------------------------------------------------------ buffer~, record~, groove~
+  // The samples live in the audio worklet, in one table shared by all
+  // processors, so record~ writes and groove~ reads the same memory while
+  // audio runs. Here only the size of each buffer~ is known (bufInfo).
+  const bufInfo = new Map(); // name -> { frames, chans, owners: Set }
+  let bufOwnerId = 0;
+  const msToFrames = (ms) => Math.max(0, Math.round(ms * AC.sampleRate / 1000));
+  const BUF_FORMATS = { int8: "int8", int16: "int16", int24: "int24", int32: "int32", float32: "float32", float64: "float64", 8: "int8", 16: "int16", 24: "int24", 32: "int32" };
+  function bufCheck(inst, name) {
+    const inf = bufInfo.get(name);
+    if (!name || !inf) inst.patch.log(`${inst.name}: nessun buffer~ chiamato ${name || "(senza nome)"}`);
+    else if (!inf.frames) inst.patch.log(`${inst.name}: il buffer~ ${name} è vuoto: dagli una durata in ms (buffer~ ${name} 5000) o leggi un file (read)`);
+  }
+
+  // buffer~ name [file] [duration ms] [channels]: sample memory (empty
+  // without a duration). Messages: read / replace (a file; replace also
+  // resizes the buffer to it), clear, setsize / size ms [channels],
+  // sizeinsamps, normalize, fill, crop, apply gain / offset, write (saves a
+  // WAV file), name / set. Outlets: (time in the editor, not here), bang
+  // when a file has been read or written.
+  class BufferObj extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.outTypes = ["float", "bang"];
+      this.bname = a.length ? String(a[0]) : "";
+      let k = 1;
+      const file = typeof a[1] === "string" ? String(a[k++]) : null;
+      let frames = typeof a[k] === "number" ? msToFrames(a[k]) : 0;
+      if (this.attrs.samps) frames = Math.max(0, Math.trunc(num(this.attrs.samps)));
+      if (this.attrs.size) frames = msToFrames(num(this.attrs.size));
+      const chans = typeof a[k + 1] === "number" ? Math.max(1, Math.min(8, Math.trunc(a[k + 1]))) : 1;
+      this.format = BUF_FORMATS[this.attr("format", "int16")] || "int16";
+      this.owner = ++bufOwnerId;
+      this.dsp("pe-buffer", 0, 1, {});
+      this.define(frames, chans);
+      if (file) {
+        fileCache.get(file).then((blob) => {
+          if (this.dead) return;
+          if (blob) this.readFile(new File([blob], file), false);
+          else this.patch.log(`buffer~ ${this.bname}: per caricare ${file} manda read e sceglilo`);
+        });
+      }
+    }
+    info() {
+      let inf = bufInfo.get(this.bname);
+      if (!inf) { inf = { frames: 0, chans: 1, owners: new Set() }; bufInfo.set(this.bname, inf); }
+      inf.owners.add(this);
+      return inf;
+    }
+    define(frames, chans) {
+      if (!this.bname) return;
+      const inf = this.info();
+      inf.frames = frames;
+      inf.chans = chans;
+      this.post({ op: "define", name: this.bname, frames, chans, owner: this.owner });
+    }
+    async readFile(file, resize) {
+      let buf;
+      try {
+        buf = await decodeAudio(await file.arrayBuffer());
+      } catch (err) {
+        this.patch.log(`buffer~ ${this.bname}: ${file.name} non si può leggere in questo browser. Prova WAV o MP3.`);
+        return;
+      }
+      if (this.dead) return;
+      const data = [];
+      for (let c = 0; c < buf.numberOfChannels; c++) data.push(buf.getChannelData(c).slice());
+      this.node.port.postMessage({ op: "load", name: this.bname, data, resize, owner: this.owner }, data.map((x) => x.buffer));
+      fileCache.put(file.name, file);
+      const nch = buf.numberOfChannels === 1 ? "mono" : `${buf.numberOfChannels} canali`;
+      this.patch.log(`buffer~ ${this.bname}: letto ${file.name} (${nch}, ${mmss(buf.duration)})`);
+    }
+    read(m, resize) {
+      const name = m.length > 1 && typeof m[1] === "string" ? m[1] : null;
+      const pick = () => this.patch.pickAudio(this, (f) => this.readFile(f, resize));
+      if (!name) return pick();
+      fileCache.get(name).then((blob) => { if (this.dead) return; if (blob) this.readFile(new File([blob], name), resize); else pick(); });
+    }
+    fromDsp(d) {
+      if (d.loaded !== undefined || d.resized !== undefined) {
+        const inf = this.info();
+        inf.frames = d.frames;
+        inf.chans = d.chans;
+        if (d.loaded !== undefined) this.out(1, BANG);
+      } else if (d.data) {
+        const w = this.writing;
+        this.writing = null;
+        if (!w) return;
+        if (!d.frames) return this.patch.log(`buffer~ ${this.bname}: è vuoto, non c'è niente da salvare`);
+        const secs = Math.round(d.frames / AC.sampleRate * 10) / 10;
+        this.patch.saveFile(w, wavFile(d.data, AC.sampleRate, this.format), `buffer~ ${this.bname}: salvato ${w} (${secs} s).`);
+        this.out(1, BANG);
+      }
+    }
+    op(o) { this.post(Object.assign({ name: this.bname }, o)); }
+    receive(i, m) {
+      const s = sel(m), x = num(m.slice(1));
+      const n2 = typeof m[2] === "number" ? m[2] : null;
+      if (s === "read" || s === "import") return this.read(m, false);
+      if (s === "replace" || s === "importreplace") return this.read(m, true);
+      if (s === "clear" || s === "clearlow") return this.op({ op: "clear" });
+      if (s === "setsize" || s === "size") return this.define(msToFrames(x), n2 !== null ? Math.max(1, Math.trunc(n2)) : this.info().chans);
+      if (s === "sizeinsamps") return this.define(Math.max(0, Math.trunc(x)), n2 !== null ? Math.max(1, Math.trunc(n2)) : this.info().chans);
+      if (s === "normalize") return this.op({ op: "normalize", v: m.length > 1 ? x : 1 });
+      if (s === "fill") {
+        if (typeof m[1] !== "number") return this.patch.log(`buffer~: qui fill accetta solo un numero`);
+        return this.op({ op: "fill", v: x });
+      }
+      if (s === "crop") return this.op({ op: "crop", s: msToFrames(x), e: msToFrames(n2 !== null ? n2 : 0) });
+      if (s === "apply") {
+        if ((m[1] === "gain" || m[1] === "offset") && n2 !== null) return this.op({ op: m[1], v: n2 });
+        return this.patch.log(`buffer~: qui apply accetta solo gain e offset`);
+      }
+      if (s === "write" || s === "writewave" || s === "writeaiff" || s === "writeflac") {
+        let f = typeof m[1] === "string" ? m[1] : `${this.bname || "buffer"}.wav`;
+        if (s === "writeaiff" || s === "writeflac") this.patch.log(`buffer~: qui si salva solo in WAV`);
+        f = f.replace(/\.(aiff?|flac|au|raw)$/i, "");
+        if (!/\.wav$/i.test(f)) f += ".wav";
+        this.writing = f;
+        return this.op({ op: "get" });
+      }
+      if (s === "format") { this.format = BUF_FORMATS[m[1]] || this.format; return; }
+      if (s === "name" || s === "set") {
+        const to = m.length > 1 ? String(m[1]) : "";
+        const inf = bufInfo.get(this.bname);
+        if (inf) { inf.owners.delete(this); if (!inf.owners.size) bufInfo.delete(this.bname); }
+        this.post({ op: "rename", from: this.bname, to, owner: this.owner });
+        this.bname = to;
+        if (to) { const ni = this.info(); if (inf) { ni.frames = inf.frames; ni.chans = inf.chans; } }
+        return;
+      }
+      if (isBang(m) || s === "wclose" || s === "sr" || s === "samptype" || s === "dither" || s === "quantization" || s === "filetype") return;
+      if (s === "open") return this.patch.log(`buffer~: qui la finestra con la forma d'onda non c'è`);
+      this.nope(m);
+    }
+    destroy() {
+      this.dead = true;
+      const inf = bufInfo.get(this.bname);
+      if (inf) { inf.owners.delete(this); if (!inf.owners.size) bufInfo.delete(this.bname); }
+      if (this.bname) this.post({ op: "free", name: this.bname, owner: this.owner });
+      super.destroy();
+    }
+  }
+
+  // record~ name [channels]: records its signal inlets into a buffer~.
+  // Left inlet: 1 starts (from the start point unless append is on), 0
+  // stops. The last two inlets: start and end point in ms (default the
+  // whole buffer). Outlet: 0 to 1 while recording from start to end.
+  // Attributes: append, loop (at the end go on from the start), loopstart,
+  // loopend. reset, set name.
+  class RecordObj extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.bname = a.length ? String(a[0]) : "";
+      this.ch = typeof a[1] === "number" ? Math.max(1, Math.min(8, Math.trunc(a[1]))) : 1;
+      this.nin = this.ch + 2;
+      this.outTypes = ["signal"];
+      this.sigIn = new Set(Array.from({ length: this.nin }, (x, k) => k));
+      this.dsp("pe-record", this.nin, 1, {
+        name: this.bname, ch: this.ch,
+        start: Math.max(0, Number(this.attr("loopstart", 0)) || 0),
+        end: this.attrs.loopend ? num(this.attrs.loopend) : 1e32,
+        append: Number(this.attr("append", 0)) ? 1 : 0,
+        loop: Number(this.attr("loop", 0)) ? 1 : 0,
+      });
+    }
+    receive(i, m) {
+      const s = sel(m), x = num(m.slice(1));
+      if (s === "set") { this.bname = m.length > 1 ? String(m[1]) : ""; return this.setp({ name: this.bname }); }
+      if (s === "reset") return this.post({ reset: 1 });
+      if (s === "append") return this.setp({ append: x ? 1 : 0 });
+      if (s === "loop") return this.setp({ loop: x ? 1 : 0 });
+      if (s === "loopstart") return this.setp({ start: x });
+      if (s === "loopend") return this.setp({ end: x });
+      if (isBang(m)) return;
+      if (!isNum(m)) return this.nope(m);
+      if (i === this.ch) return this.setp({ start: m[0] });
+      if (i === this.ch + 1) return this.setp({ end: m[0] });
+      if (i > 0) return this.nope(m);
+      if (m.length > 1 && typeof m[1] === "number") return this.setp({ start: m[0], end: m[1] });
+      if (m[0] !== 0) bufCheck(this, this.bname);
+      this.post({ run: m[0] !== 0 ? 1 : 0 });
+    }
+  }
+
+  // groove~ name [outputs]: plays a buffer~ at the speed of the signal in
+  // the left inlet (1 normal, 2 double, -1 backwards, 0 stopped). A number
+  // in the left inlet sets the position in ms and starts playing; middle and
+  // right inlets: loop start and end in ms (end 0 = end of the buffer).
+  // loop 1 repeats between the loop points (off by default: it stops at the
+  // end of the buffer). startloop, endloop, stop, setloop, reset, set.
+  // Outlets: one signal per channel, then 0 to 1 across the loop.
+  const GROOVE_TODO = ["timestretch", "pitchshift", "pitchshiftcent", "mode", "quality", "formant", "formantcorrection", "pitchcorrection", "lock", "followglobaltempo"];
+  class Groove extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.bname = a.length ? String(a[0]) : "";
+      this.nout = typeof a[1] === "number" ? Math.max(1, Math.min(8, Math.trunc(a[1]))) : 1;
+      this.nin = 3;
+      this.outTypes = new Array(this.nout + 1).fill("signal");
+      this.sigIn = new Set([0, 1, 2]);
+      this.dsp("pe-groove", 3, this.nout + 1, {
+        name: this.bname, nout: this.nout,
+        ls: Number(this.attr("loopstart", 0)) || 0, le: Number(this.attr("loopend", 0)) || 0,
+        loop: Number(this.attr("loop", 0)) ? 1 : 0,
+      });
+    }
+    receive(i, m) {
+      const s = sel(m), x = num(m.slice(1));
+      if (s === "set") { this.bname = m.length > 1 ? String(m[1]) : ""; return this.setp({ name: this.bname }); }
+      if (s === "loop") return this.setp({ loop: x ? 1 : 0 });
+      if (s === "loopstart") return this.setp({ ls: x });
+      if (s === "loopend") return this.setp({ le: x });
+      if (s === "setloop") return this.setp({ ls: x, le: typeof m[2] === "number" ? m[2] : 0 });
+      if (s === "reset") return this.setp({ ls: 0, le: 0 });
+      if (s === "startloop") { bufCheck(this, this.bname); return this.post({ startloop: 1 }); }
+      if (s === "endloop") return this.post({ endloop: 1 });
+      if (s === "stop") return this.post({ stop: 1 });
+      if (s === "loopinterp") return;
+      if (GROOVE_TODO.includes(s)) return this.patch.log(`groove~: ${s} qui non è disponibile`);
+      if (isBang(m)) return;
+      if (!isNum(m)) return this.nope(m);
+      if (i === 0) { bufCheck(this, this.bname); return this.post({ pos: m[0] }); }
+      this.setp(i === 1 ? { ls: m[0] } : { le: m[0] });
+    }
+  }
+
   class NeedsWorklet extends Bad {
     constructor(p, b, a) {
       super(p, b, a);
@@ -1656,6 +2186,307 @@
     receive(i, m) { if (isNum(m)) jumpParam(this.src.offset, m[0]); else if (!isBang(m)) this.nope(m); }
     sigOut() { return { node: this.src }; }
     destroy() { this.src.stop(); this.src.disconnect(); }
+  }
+
+  // phasor~ [frequency]: ramp from 0 to 1. Right inlet: phase (0-1).
+  // Attributes: phaseoffset (the phase set by reset), syncupdate (a new
+  // frequency waits for the end of the cycle; bang applies it at once).
+  class Phasor extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 2;
+      this.outTypes = ["signal"];
+      this.sigIn = new Set([0]);
+      const freq = typeof a[0] === "number" ? a[0] : Number(this.attr("frequency", 0)) || 0;
+      this.poff = this.attrs.phaseoffset && this.attrs.phaseoffset.length ? num(this.attrs.phaseoffset) : 0;
+      this.dsp("pe-phasor", 1, 1, { freq, sync: Number(this.attr("syncupdate", 0)) ? 1 : 0 });
+    }
+    receive(i, m) {
+      const s = sel(m), x = num(m.slice(1));
+      if (s === "frequency") return this.setp({ freq: x });
+      if (s === "syncupdate") return this.setp({ sync: x ? 1 : 0 });
+      if (s === "phaseoffset") { this.poff = x; return; }
+      if (s === "reset") return this.post({ phase: this.poff });
+      if (isBang(m)) return this.post({ now: 1 });
+      if (!isNum(m)) return this.nope(m);
+      if (i === 1) return this.post({ phase: m[0] });
+      this.setp({ freq: m[0] });
+    }
+  }
+
+  // snapshot~ [interval ms]: the signal as a number, on bang or every
+  // interval while audio is on. Left inlet: signal, bang, 1/0 (or start,
+  // stop) to turn the interval on and off; right inlet: interval (0 = only
+  // on bang). Attribute offset: which sample of the last block (0-127).
+  class Snapshot extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 2;
+      this.outTypes = ["float"];
+      this.sigIn = new Set([0]);
+      this.an = AC.createAnalyser();
+      this.an.fftSize = 128;
+      this.an.connect(sink);
+      this.buf = new Float32Array(128);
+      this.offset = Math.trunc(Number(this.attr("offset", 0)) || 0);
+      this.ms = typeof a[0] === "number" ? a[0] : Number(this.attr("interval", 0)) || 0;
+      this.stopped = false;
+      this.t = null;
+      this.update();
+    }
+    sigTarget(i) { return i === 0 ? { node: this.an } : { node: nullIn }; }
+    value() {
+      if (!this.sigCount[0]) return 0;
+      this.an.getFloatTimeDomainData(this.buf);
+      return this.buf[Math.max(0, Math.min(127, this.offset))];
+    }
+    update() {
+      if (this.t) clearInterval(this.t);
+      this.t = null;
+      if (!this.stopped && this.ms > 0) {
+        this.t = setInterval(() => { if (AC.state === "running") this.out(0, [this.value()]); }, Math.max(1, this.ms));
+      }
+    }
+    receive(i, m) {
+      const s = sel(m), x = num(m.slice(1));
+      if (i === 1) { if (isNum(m)) { this.ms = Math.max(0, m[0]); this.update(); } else this.nope(m); return; }
+      if (isBang(m)) return this.out(0, [this.value()]);
+      if (s === "start") { this.stopped = false; return this.update(); }
+      if (s === "stop") { this.stopped = true; return this.update(); }
+      if (s === "interval") { this.ms = Math.max(0, x); return this.update(); }
+      if (s === "sampleinterval") { this.ms = Math.max(0, x) * 1000 / AC.sampleRate; return this.update(); }
+      if (s === "active") { this.stopped = !x; return this.update(); }
+      if (s === "offset") { this.offset = Math.trunc(x); return; }
+      if (isNum(m)) { this.stopped = m[0] === 0; return this.update(); }
+      this.nope(m);
+    }
+    destroy() { if (this.t) clearInterval(this.t); this.an.disconnect(); }
+  }
+
+  // peakamp~ [interval ms]: the largest absolute value since the last
+  // report, on bang or every interval. Right inlet: interval (0 = only on
+  // bang). Attribute signed: the peak keeps its sign.
+  class Peakamp extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 2;
+      this.outTypes = ["float"];
+      this.sigIn = new Set([0]);
+      this.ms = typeof a[0] === "number" ? a[0] : Number(this.attr("interval", 0)) || 0;
+      this.dsp("pe-probe", 1, 1, { signed: Number(this.attr("signed", 0)) ? 1 : 0, every: this.every() });
+    }
+    every() { return this.ms > 0 ? Math.max(1, Math.round(this.ms * AC.sampleRate / 1000)) : 0; }
+    fromDsp(d) { if (d.v !== undefined) this.out(0, [d.v]); }
+    receive(i, m) {
+      const s = sel(m), x = num(m.slice(1));
+      if (i === 1) {
+        if (!isNum(m)) return this.nope(m);
+        this.ms = Math.max(0, m[0]);
+        return this.setp({ every: this.every() });
+      }
+      if (s === "interval") { this.ms = Math.max(0, x); return this.setp({ every: this.every() }); }
+      if (s === "signed") return this.setp({ signed: x ? 1 : 0 });
+      if (isBang(m)) return this.post({ get: 1 });
+      this.nope(m);
+    }
+  }
+
+  // degrade~ [ratio] [bits]: lower sampling rate (ratio 0-1, middle inlet)
+  // and bit depth (1-52, right inlet), without smoothing, as in Max.
+  class Degrade extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 3;
+      this.outTypes = ["signal"];
+      this.sigIn = new Set([0, 1, 2]);
+      this.dsp("pe-degrade", 3, 1, { ratio: typeof a[0] === "number" ? a[0] : 1, bits: typeof a[1] === "number" ? a[1] : 24 });
+    }
+    receive(i, m) {
+      if (isBang(m)) return;
+      if (!isNum(m) || i === 0) return this.nope(m);
+      this.setp(i === 1 ? { ratio: m[0] } : { bits: m[0] });
+    }
+  }
+
+  // overdrive~ [drive]: soft clipping; drive 1 = no distortion (right inlet,
+  // number or signal; a number in the left inlet also sets it, as in Max).
+  class Overdrive extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 2;
+      this.outTypes = ["signal"];
+      this.sigIn = new Set([0, 1]);
+      this.dsp("pe-overdrive", 2, 1, { drive: typeof a[0] === "number" ? a[0] : 1 });
+    }
+    receive(i, m) {
+      if (isBang(m)) return;
+      if (!isNum(m)) return this.nope(m);
+      this.setp({ drive: m[0] });
+    }
+  }
+
+  // comb~ [max delay ms] [delay ms] [a] [b] [c]:
+  // y[n] = a x[n] + b x[n - delay] + c y[n - delay]. Inlets: signal, delay,
+  // a (gain), b (feedforward), c (feedback), numbers or signals. clear.
+  class Comb extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 5;
+      this.outTypes = ["signal"];
+      this.sigIn = new Set([0, 1, 2, 3, 4]);
+      const n = (k, d) => (typeof a[k] === "number" ? a[k] : d);
+      const max = n(0, 10) > 0 ? n(0, 10) : 10;
+      this.dsp("pe-comb", 5, 1, { max, del: Math.min(max, Math.max(0, n(1, 0))), a: n(2, 0), b: n(3, 0), c: n(4, 0) });
+    }
+    receive(i, m) {
+      if (sel(m) === "clear") return this.post({ clear: 1 });
+      if (isBang(m)) return;
+      if (!isNum(m) || i === 0) return this.nope(m);
+      this.setp({ [["", "del", "a", "b", "c"][i]]: m[0] });
+    }
+  }
+
+  // reson~ [gain] [center Hz] [Q]: resonant bandpass (Smith-Angell).
+  // Inlets: signal, gain, center frequency, Q (numbers or signals); a list
+  // in the left inlet sets gain, frequency and Q. clear.
+  class Reson extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 4;
+      this.outTypes = ["signal"];
+      this.sigIn = new Set([0, 1, 2, 3]);
+      const n = (k, d) => (typeof a[k] === "number" ? a[k] : d);
+      const q = n(2, Number(this.attr("q", 0.01)));
+      this.dsp("pe-reson", 4, 1, {
+        gain: Math.max(0, n(0, Number(this.attr("gain", 0)) || 0)),
+        cf: Math.max(0, n(1, Number(this.attr("cf", 0)) || 0)),
+        q: q > 0 ? q : 0.01,
+      });
+    }
+    receive(i, m) {
+      const s = sel(m);
+      if (s === "clear") return this.post({ clear: 1 });
+      if (s === "gain" || s === "cf" || s === "q") return this.setp({ [s]: num(m.slice(1)) });
+      if (isBang(m)) return;
+      if (!isNum(m)) return this.nope(m);
+      if (i === 0) {
+        const n = m.filter((x) => typeof x === "number");
+        if (n.length < 2) return this.nope(m);
+        const o = { gain: n[0], cf: n[1] };
+        if (n.length > 2) o.q = n[2];
+        return this.setp(o);
+      }
+      this.setp({ [["", "gain", "cf", "q"][i]]: m[0] });
+    }
+  }
+
+  // freqshift~ [Hz]: frequency shifter (single-sideband ring modulation).
+  // Right inlet: shift in Hz, number or signal. clear, resetphase.
+  class FreqShift extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 2;
+      this.outTypes = ["signal"];
+      this.sigIn = new Set([0, 1]);
+      this.dsp("pe-freqshift", 2, 1, { shift: typeof a[0] === "number" ? a[0] : 0 });
+    }
+    receive(i, m) {
+      const s = sel(m);
+      if (s === "clear") return this.post({ clear: 1 });
+      if (s === "resetphase") return this.post({ resetphase: 1 });
+      if (isBang(m)) return;
+      if (!isNum(m) || i !== 1) return this.nope(m);
+      this.setp({ shift: m[0] });
+    }
+  }
+
+  // send~ / receive~: one summing node per name, so several send~ add up.
+  // It is a DelayNode set to 0: no delay, except in a feedback loop, where
+  // Web Audio delays by one block (128 samples), as Max adds a delay there.
+  const sigBus = new Map();
+  function sigBusNode(name) {
+    let n = sigBus.get(name);
+    if (!n) {
+      n = AC.createDelay(1);
+      n.delayTime.value = 0;
+      n.connect(sink);
+      sigBus.set(name, n);
+    }
+    return n;
+  }
+  class SendSig extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.outTypes = [];
+      this.sigIn = new Set([0]);
+      this.g = AC.createGain();
+      this.g.connect(sink);
+      this.dest = "";
+      this.setName(a.length ? String(a[0]) : "");
+    }
+    setName(name) {
+      if (this.dest) { try { this.g.disconnect(sigBusNode(this.dest)); } catch (err) { /* not connected */ } }
+      this.dest = name;
+      if (name) this.g.connect(sigBusNode(name));
+    }
+    receive(i, m) {
+      const s = sel(m);
+      if (s === "set") this.setName(m.length > 1 ? String(m[1]) : "");
+      else if (s !== "clear") this.nope(m);
+    }
+    sigTarget() { return { node: this.g }; }
+    destroy() { this.g.disconnect(); }
+  }
+  class ReceiveSig extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.outTypes = ["signal"];
+      this.g = AC.createGain();
+      this.g.connect(sink);
+      this.rname = "";
+      this.setName(a.length ? String(a[0]) : "");
+    }
+    setName(name) {
+      if (this.rname) { try { sigBusNode(this.rname).disconnect(this.g); } catch (err) { /* not connected */ } }
+      this.rname = name;
+      if (name) sigBusNode(name).connect(this.g);
+    }
+    receive(i, m) {
+      if (sel(m) === "set") this.setName(m.length > 1 ? String(m[1]) : "");
+      else this.nope(m);
+    }
+    sigOut() { return { node: this.g }; }
+    destroy() { this.setName(""); this.g.disconnect(); }
+  }
+
+  // selector~ [inputs] [open] and gate~ [outlets] [open]. Left inlet: the
+  // choice (int, float, next, bang = next, or a signal, which overrides
+  // numbers). Attributes ramptime (ms crossfade) and stepmode, also as messages.
+  class SwitchSig extends WObj {
+    constructor(p, b, a, gate) {
+      super(p, b, a);
+      const n = a.length && typeof a[0] === "number" ? Math.max(1, Math.trunc(a[0])) : 1;
+      const open = a.length > 1 && typeof a[1] === "number" ? Math.trunc(a[1]) : 0;
+      this.nin = gate ? 2 : n + 1;
+      this.outTypes = gate ? new Array(n).fill("signal") : ["signal"];
+      this.sigIn = new Set(Array.from({ length: this.nin }, (x, k) => k));
+      this.dsp(gate ? "pe-gate" : "pe-selector", this.nin, this.outTypes.length, {
+        n, open, sigctl: 0,
+        ramp: Math.max(0, Number(this.attr("ramptime", 0)) || 0),
+        step: Number(this.attr("stepmode", 0)) ? 1 : 0,
+      });
+    }
+    receive(i, m) {
+      const s = sel(m);
+      if (s === "ramptime") return this.setp({ ramp: Math.max(0, num(m.slice(1))) });
+      if (s === "stepmode") return this.setp({ step: num(m.slice(1)) ? 1 : 0 });
+      if (i > 0) return this.nope(m);
+      if (this.sigCount[0]) return; // a signal in the left inlet decides
+      if (isBang(m) || s === "next") return this.post({ next: 1 });
+      if (isNum(m)) return this.post({ sel: Math.trunc(m[0]) });
+      this.nope(m);
+    }
+    onSig(i, c) { if (i === 0) this.setp({ sigctl: c > 0 ? 1 : 0 }); }
   }
 
   class Dac extends Obj {
@@ -2157,6 +2988,177 @@
       if (running && this.patch.hasCord(this.box.id, this.ch + 2)) this.out(this.ch + 2, dbs);
     }
     destroy() { this.gs.forEach((g) => g.disconnect()); this.ans.forEach((a) => a.disconnect()); }
+  }
+
+  // meter~: peak level as LEDs (default 12 LEDs of 3 dB, plus the red
+  // "over" LED, lit for a second at 1 or more). Outlet: the peak of each
+  // interval (ms, default 50) while audio is on. A number shows as a level.
+  // Vertical when taller than wide (orientation 0), or as set.
+  const METER_ATTRS = ["numleds", "dbperled", "nhotleds", "ntepidleds", "nwarmleds", "orientation", "monotone"];
+  class Meter extends WObj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.outTypes = ["float"];
+      this.sigIn = new Set([0]);
+      this.level = 0;
+      this.fromSig = false;
+      this.lastMsg = 0;
+      this.overUntil = 0;
+      this.dsp("pe-probe", 1, 1, { signed: 0, every: this.every() });
+    }
+    every() {
+      const ms = Math.max(10, Math.min(2000, Number(this.battr("interval", 50)) || 50));
+      return Math.max(1, Math.round(ms * AC.sampleRate / 1000));
+    }
+    show(v, fromSig) {
+      this.level = Math.abs(v);
+      this.fromSig = fromSig;
+      this.lastMsg = performance.now();
+      if (this.level >= 1) this.overUntil = this.lastMsg + 1000;
+    }
+    fromDsp(d) {
+      if (d.v === undefined) return;
+      this.show(d.v, true);
+      this.out(0, [d.v]);
+    }
+    receive(i, m) {
+      const s = sel(m);
+      if (s === "interval") { this.box.interval = num(m.slice(1)); return this.setp({ every: this.every() }); }
+      if (METER_ATTRS.includes(s)) { this.box[s] = num(m.slice(1)); return; }
+      if (isNum(m)) return this.show(m[0], false);
+      if (!isBang(m)) this.nope(m);
+    }
+    build(el) { this.canvas = document.createElement("canvas"); this.canvas.className = "gui-canvas"; el.append(this.canvas); }
+    draw() {
+      const c = this.canvas;
+      if (!c) return;
+      const now = performance.now();
+      if (this.fromSig && AC.state !== "running" && now - this.lastMsg > 200) this.level = 0;
+      const [W, H, dpr] = canvasSize(c, this.rect());
+      const g = c.getContext("2d");
+      const n = Math.max(1, Math.min(40, Math.trunc(this.battr("numleds", 12)) || 12));
+      const step = Number(this.battr("dbperled", 3)) || 3;
+      const hot = Math.trunc(this.battr("nhotleds", 3)), tep = Math.trunc(this.battr("ntepidleds", 3)), warm = Math.trunc(this.battr("nwarmleds", 3));
+      const ori = Math.trunc(this.battr("orientation", 0));
+      const vert = ori === 2 || (ori !== 1 && H > W);
+      const mono = !!this.battr("monotone", 0);
+      const db = this.level > 0 ? 20 * Math.log10(this.level) : -Infinity;
+      g.fillStyle = "#333333";
+      g.fillRect(0, 0, W, H);
+      const len = vert ? H : W, gap = Math.max(1, Math.round(dpr)), cell = (len - gap) / (n + 1);
+      const leds = [];
+      for (let k = 0; k < n; k++) {
+        const lit = db > -(n - k) * step;
+        let col = "#3fd23f";
+        if (!mono) {
+          if (k >= n - hot) col = "#ff5a1f";
+          else if (k >= n - hot - tep) col = "#ffd21f";
+          else if (k >= n - hot - tep - warm) col = "#b4e61e";
+        }
+        leds.push(lit ? col : "#4a4a4a");
+      }
+      leds.push(now < this.overUntil ? "#ff2020" : "#4a4a4a");
+      leds.forEach((col, k) => {
+        g.fillStyle = col;
+        const a = gap + k * cell, s = cell - gap;
+        if (vert) g.fillRect(gap, H - a - s, W - 2 * gap, s);
+        else g.fillRect(a, gap, s, H - 2 * gap);
+      });
+    }
+  }
+
+  // spectroscope~: spectrum of the left inlet; sono 1 draws a sonogram
+  // (time left to right, frequency upwards). Attributes as in Max: domain
+  // (Hz, default 0 22050), range (default 0 1.2), logfreq (0), logamp (1),
+  // sono (0), interval (ms, 20).
+  const SPEC_DB = 13.5; // AnalyserNode level of a full-scale sine is about -13.5 dB
+  const SPEC_ATTRS = ["logfreq", "logamp", "sono", "interval", "monochrome", "scroll"];
+  class Spectroscope extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 2;
+      this.outTypes = [""];
+      this.sigIn = new Set([0, 1]);
+      this.an = AC.createAnalyser();
+      this.an.fftSize = 4096;
+      this.an.smoothingTimeConstant = 0;
+      this.an.connect(sink);
+      this.bins = new Float32Array(this.an.frequencyBinCount).fill(-200);
+      this.lastDraw = 0;
+    }
+    sigTarget(i) { return i === 0 ? { node: this.an } : { node: nullIn }; }
+    build(el) { this.canvas = document.createElement("canvas"); this.canvas.className = "gui-canvas"; el.append(this.canvas); }
+    receive(i, m) {
+      const s = sel(m);
+      if (s === "domain" && m.length > 2) { this.box.domain = [num([m[1]]), num([m[2]])]; return; }
+      if (s === "range" && m.length > 1) { this.box.range = m.length > 2 ? [num([m[1]]), num([m[2]])] : [0, num([m[1]])]; return; }
+      if (SPEC_ATTRS.includes(s)) { this.box[s] = num(m.slice(1)); return; }
+      this.nope(m);
+    }
+    // 0..1 height of a level in dB
+    height(dB) {
+      const rg = this.battr("range", [0, 1.2]);
+      const lo = Number(rg[0]) || 0, hi = Number(rg[1]) || 1.2;
+      const amp = Math.pow(10, (dB + SPEC_DB) / 20);
+      if (this.battr("logamp", 1)) {
+        const top = 20 * Math.log10(Math.max(1e-9, hi));
+        const bot = lo > 0 ? 20 * Math.log10(lo) : top - 90;
+        return (dB + SPEC_DB - bot) / ((top - bot) || 1);
+      }
+      return (amp - lo) / ((hi - lo) || 1);
+    }
+    // level in dB at a frequency (largest bin between f0 and f1)
+    levelAt(f0, f1) {
+      const hz = AC.sampleRate / this.an.fftSize, nb = this.bins.length;
+      let k0 = Math.max(0, Math.floor(f0 / hz)), k1 = Math.min(nb - 1, Math.ceil(f1 / hz));
+      if (k1 < k0) k1 = k0;
+      let v = -200;
+      for (let k = k0; k <= k1; k++) if (this.bins[k] > v) v = this.bins[k];
+      return v;
+    }
+    draw() {
+      const c = this.canvas;
+      if (!c) return;
+      const now = performance.now();
+      if (now - this.lastDraw < Math.max(10, Number(this.battr("interval", 20)) || 20)) return;
+      this.lastDraw = now;
+      const [W, H, dpr] = canvasSize(c, this.rect());
+      const g = c.getContext("2d");
+      const running = AC.state === "running";
+      if (running) this.an.getFloatFrequencyData(this.bins);
+      const dom = this.battr("domain", [0, 22050]);
+      let lo = Math.max(0, Number(dom[0]) || 0), hi = Math.min(AC.sampleRate / 2, Number(dom[1]) || 22050);
+      if (hi <= lo) hi = lo + 1;
+      const logf = !!this.battr("logfreq", 0), llo = Math.max(10, lo);
+      const fOf = (t) => (logf ? llo * Math.pow(hi / llo, t) : lo + t * (hi - lo));
+      if (this.battr("sono", 0)) {
+        if (!running) return;
+        const s = Math.max(1, Math.round(dpr));
+        g.drawImage(c, s, 0, W - s, H, 0, 0, W - s, H);
+        const mono = this.battr("monochrome", 1);
+        for (let y = 0; y < H; y++) {
+          const t0 = 1 - (y + 1) / H, t1 = 1 - y / H;
+          const v = Math.max(0, Math.min(1, this.height(this.levelAt(fOf(t0), fOf(t1)))));
+          if (mono) { const q = Math.round(51 + v * 204); g.fillStyle = `rgb(${q},${q},${q})`; }
+          else g.fillStyle = `hsl(${Math.round(240 - v * 240)},90%,${Math.round(15 + v * 45)}%)`;
+          g.fillRect(W - s, y, s, 1);
+        }
+        return;
+      }
+      g.fillStyle = "#333333";
+      g.fillRect(0, 0, W, H);
+      g.fillStyle = "rgba(200,230,233,0.85)";
+      g.beginPath();
+      g.moveTo(0, H);
+      for (let x = 0; x < W; x++) {
+        const v = Math.max(0, Math.min(1, this.height(this.levelAt(fOf(x / W), fOf((x + 1) / W)))));
+        g.lineTo(x, H - v * H);
+      }
+      g.lineTo(W, H);
+      g.closePath();
+      g.fill();
+    }
+    destroy() { this.an.disconnect(); }
   }
 
   // ------------------------------------------------------------ kslider
@@ -2804,6 +3806,19 @@
     "send": (p, b, a) => new Send(p, b, a),
     "r": (p, b, a) => new Receive(p, b, a),
     "receive": (p, b, a) => new Receive(p, b, a),
+    "gate": (p, b, a) => new Gate(p, b, a),
+    "route": (p, b, a) => new Route(p, b, a),
+    "switch": (p, b, a) => new SwitchCtl(p, b, a),
+    "change": (p, b, a) => new Change(p, b, a),
+    "scale": (p, b, a) => new Scale(p, b, a),
+    ">": (p, b, a) => new Compare(p, b, a, ">"),
+    "<": (p, b, a) => new Compare(p, b, a, "<"),
+    "==": (p, b, a) => new Compare(p, b, a, "=="),
+    ">=": (p, b, a) => new Compare(p, b, a, ">="),
+    "<=": (p, b, a) => new Compare(p, b, a, "<="),
+    "!=": (p, b, a) => new Compare(p, b, a, "!="),
+    "makenote": (p, b, a) => new Makenote(p, b, a),
+    "key": (p, b, a) => new KeyObj(p, b, a),
     "print": (p, b, a) => new Print(p, b, a),
     "loadbang": (p, b, a) => new Loadbang(p, b, a),
     "loadmess": (p, b, a) => new Loadmess(p, b, a),
@@ -2822,6 +3837,20 @@
     "adsr~": (p, b, a) => (WK ? new Adsr(p, b, a) : new ParamAdsr(p, b, a)),
     "line~": (p, b, a) => (WK ? new Line(p, b, a) : new ParamLine(p, b, a)),
     "sig~": (p, b, a) => new Sig(p, b, a),
+    "phasor~": (p, b, a) => (WK ? new Phasor(p, b, a) : new NeedsWorklet(p, b, a)),
+    "snapshot~": (p, b, a) => new Snapshot(p, b, a),
+    "peakamp~": (p, b, a) => (WK ? new Peakamp(p, b, a) : new NeedsWorklet(p, b, a)),
+    "degrade~": (p, b, a) => (WK ? new Degrade(p, b, a) : new NeedsWorklet(p, b, a)),
+    "overdrive~": (p, b, a) => (WK ? new Overdrive(p, b, a) : new NeedsWorklet(p, b, a)),
+    "comb~": (p, b, a) => (WK ? new Comb(p, b, a) : new NeedsWorklet(p, b, a)),
+    "reson~": (p, b, a) => (WK ? new Reson(p, b, a) : new NeedsWorklet(p, b, a)),
+    "freqshift~": (p, b, a) => (WK ? new FreqShift(p, b, a) : new NeedsWorklet(p, b, a)),
+    "send~": (p, b, a) => new SendSig(p, b, a),
+    "s~": (p, b, a) => new SendSig(p, b, a),
+    "receive~": (p, b, a) => new ReceiveSig(p, b, a),
+    "r~": (p, b, a) => new ReceiveSig(p, b, a),
+    "selector~": (p, b, a) => (WK ? new SwitchSig(p, b, a, false) : new NeedsWorklet(p, b, a)),
+    "gate~": (p, b, a) => (WK ? new SwitchSig(p, b, a, true) : new NeedsWorklet(p, b, a)),
     "dac~": (p, b, a) => new Dac(p, b, a),
     "adc~": (p, b, a) => new Adc(p, b, a),
     "tapin~": (p, b, a) => (WK ? new TapIn(p, b, a) : new NeedsWorklet(p, b, a)),
@@ -2830,6 +3859,9 @@
     "cverb~": (p, b, a) => (WK ? new CVerb(p, b, a) : new NeedsWorklet(p, b, a)),
     "clip~": (p, b, a) => (WK ? new ClipSig(p, b, a) : new NeedsWorklet(p, b, a)),
     "limi~": (p, b, a) => (WK ? new Limi(p, b, a) : new NeedsWorklet(p, b, a)),
+    "buffer~": (p, b, a) => (WK ? new BufferObj(p, b, a) : new NeedsWorklet(p, b, a)),
+    "record~": (p, b, a) => (WK ? new RecordObj(p, b, a) : new NeedsWorklet(p, b, a)),
+    "groove~": (p, b, a) => (WK ? new Groove(p, b, a) : new NeedsWorklet(p, b, a)),
     "sfplay~": (p, b, a) => (WK ? new Sfplay(p, b, a) : new NeedsWorklet(p, b, a)),
     "sfrecord~": (p, b, a) => (WK ? new SfRecord(p, b, a) : new NeedsWorklet(p, b, a)),
   };
@@ -2859,6 +3891,8 @@
       extra: { angle: 270.0, background: 1, bgcolor: [0.5, 0.55, 0.75, 0.35], mode: 0, proportion: 0.5 },
     },
     "scope~": { make: (p, b, a) => new AnScope(p, b, a), size: [130, 130], io: [2, []], extra: {} },
+    "meter~": { make: (p, b, a) => (WK ? new Meter(p, b, a) : new NeedsWorklet(p, b, a)), size: [80, 13], io: [1, ["float"]], extra: {} },
+    "spectroscope~": { make: (p, b, a) => new Spectroscope(p, b, a), size: [300, 100], io: [2, [""]], extra: {} },
     "live.scope~": { make: (p, b, a) => new LiveScope(p, b, a), size: [140, 70], io: [2, ["bang"]], extra: {} },
     "live.gain~": {
       make: (p, b, a) => new LiveGain(p, b, a), size: [48, 136], io: [2, ["signal", "signal", "", "float", "list"]],

@@ -317,6 +317,8 @@
     <h3>File audio</h3>
     <p>Per suonare un file audio usa <code>sfplay~</code> (<code>sfplay~ 2</code> per un file stereo). Collegagli i messaggi <code>open</code> per scegliere il file, <code>1</code> per farlo partire e <code>0</code> per fermarlo. Il file non resta nella patch: quando la riapri, rifai <code>open</code>.</p>
     <p><code>playlist~</code> mostra i file con la forma d'onda. Per aggiungerli: tocca la playlist~ vuota, manda <code>append</code> o trascinali sopra. Su ogni file: &#9654; suona e ferma, il cerchio attiva il loop, il punto a sinistra si trascina per cambiare l'ordine. Sulla forma d'onda trascina per scegliere la parte da suonare; un clic la toglie e, mentre suona, sposta lì la testina. Tasto destro: Rimuovi. I file restano in questo browser, così la patch li ritrova quando la riapri.</p>
+    <h3>Campionare dal vivo</h3>
+    <p><code>buffer~ nome 5000</code> prepara 5 secondi di memoria: senza la durata è vuoto e non registra niente. <code>record~ nome</code> ci registra il segnale che riceve: <code>1</code> parte dall'inizio, <code>0</code> ferma. <code>groove~ nome</code> lo risuona alla velocità del segnale nell'ingresso sinistro (<code>sig~ 1</code> normale, <code>sig~ 2</code> doppia, <code>sig~ -1</code> al contrario): un numero nell'ingresso sinistro sceglie da dove partire in ms (<code>0</code> dall'inizio), <code>loop 1</code> e <code>startloop</code> lo ripetono tra i punti di loop (ingressi centrale e destro, in ms). Il buffer~ non resta nella patch: <code>write</code> lo salva come file WAV, <code>read</code> carica un file.</p>
     <h3>Modificare</h3>
     <ol>
       <li>Sblocca la patch con il lucchetto (o <code>Cmd+E</code> / <code>Ctrl+E</code>).</li>

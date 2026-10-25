@@ -540,13 +540,16 @@
   }
 
   // ------------------------------------------------------------ open patches
+  // what to do with the example patch, shown when it opens
+  const EXAMPLE_HINT = "Pronto. Premi Audio, poi clicca il messaggio 1. Per l'aiuto premi ?";
   function openPatch(json, name) {
     if (!json || !json.patcher) { log("Questo non sembra il testo di una patch .maxpat."); return false; }
     selection.clear(); selCord = null;
     undoStack.length = 0; redoStack.length = 0;
     patch.load(json);
-    for (const e of patch.entries.values()) if (e.inst.bad) log(`${String(e.box.text || e.box.maxclass).split(" ")[0]}: oggetto non disponibile qui`);
     patchName = name || "senza titolo";
+    log(`Aperta la patch \u201c${patchName}\u201d.`);
+    for (const e of patch.entries.values()) if (e.inst.bad) log(`${String(e.box.text || e.box.maxclass).split(" ")[0]}: oggetto non disponibile qui`);
     $("#name").textContent = patchName;
     setPresenting(!!(json.patcher.openinpresentation), true);
     renderAll();
@@ -1137,7 +1140,7 @@
   });
   $("#file").addEventListener("click", () => { $("#f-openpres").checked = !!patch.header.openinpresentation; $("#f-name").value = patchName; fileMsg(""); refreshFiles(); $("#filedlg").hidden = false; });
   $("#f-new").addEventListener("click", () => { openPatch({ patcher: { boxes: [], lines: [] } }, "nuova patch"); setLocked(false); closeDialogs(); });
-  $("#f-example").addEventListener("click", () => { openPatch(window.EXAMPLE_PATCH, "simple_monoSynth"); setLocked(true); closeDialogs(); });
+  $("#f-example").addEventListener("click", () => { openPatch(window.EXAMPLE_PATCH, "simple_monoSynth"); setLocked(true); closeDialogs(); log(EXAMPLE_HINT); });
   $("#f-save").addEventListener("click", () => {
     const n = $("#f-name").value.trim();
     if (!n) { fileMsg("Scrivi un nome per la patch."); return; }
@@ -1218,13 +1221,14 @@
   // The patch opens once the audio processors are loaded.
   window.PE.ready.then((full) => {
     const saved = store.get(KEY_CURRENT, null);
-    if (saved && saved.json && saved.json.patcher) openPatch(saved.json, saved.name || "patch");
+    const reopen = !!(saved && saved.json && saved.json.patcher);
+    if (reopen) openPatch(saved.json, saved.name || "patch");
     else openPatch(window.EXAMPLE_PATCH, "simple_monoSynth");
     setLocked(true);
     requestAnimationFrame(tick);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { renderAll(); });
     if (!full) log("Attenzione: questo browser non carica l'audio completo (niente modulazione di fase).");
-    log("Pronto. Premi Audio, poi clicca il messaggio 1. Per l'aiuto premi ?");
+    log(reopen ? "Premi ? per l'aiuto." : EXAMPLE_HINT);
   });
   window.__patcher = { patch, setLocked, openPatch, newBox, get zoom() { return zoom; } };
 })();

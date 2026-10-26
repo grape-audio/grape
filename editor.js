@@ -534,9 +534,13 @@
   function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); log("Annullato."); }
   function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); }
   let autosaveTimer = null;
-  function scheduleAutosave() {
+  // edited: the open patch was changed since it was opened (a patch opened
+  // from a link must not erase changes the student has not saved)
+  let edited = false;
+  function scheduleAutosave(opened) {
+    if (!opened) edited = true;
     clearTimeout(autosaveTimer);
-    autosaveTimer = setTimeout(() => store.set(KEY_CURRENT, { name: patchName, json: patch.toJSON() }), 400);
+    autosaveTimer = setTimeout(() => store.set(KEY_CURRENT, { name: patchName, json: patch.toJSON(), edited }), 400);
   }
 
   // ------------------------------------------------------------ open patches
@@ -554,7 +558,8 @@
     setPresenting(!!(json.patcher.openinpresentation), true);
     renderAll();
     fitZoom();
-    scheduleAutosave();
+    edited = false;
+    scheduleAutosave(true);
     return true;
   }
 
@@ -1219,16 +1224,45 @@
   showAudio();
   log("Caricamento dell'audio...");
   // The patch opens once the audio processors are loaded.
-  window.PE.ready.then((full) => {
+  // A link like ...?patch=live_fx opens patches/live_fx.maxpat of this site.
+  const linked = new URLSearchParams(location.search).get("patch");
+  const linkName = linked && /^[\w-]{1,64}$/.test(linked) ? linked : null;
+  // Before a linked patch replaces the open one, unsaved changes go to the
+  // saved patches. Autosaves older than the "edited" flag count as edited,
+  // except the example.
+  function keepUnsaved(saved) {
+    if (!saved || !saved.json || !saved.json.patcher) return "";
+    const name = saved.name || "patch";
+    if (!(saved.edited ?? name !== "simple_monoSynth")) return "";
+    const files = store.get(KEY_FILES, {});
+    if (files[name] && JSON.stringify(files[name]) === JSON.stringify(saved.json)) return "";
+    let n = `${name} (copia)`;
+    for (let k = 2; files[n]; k++) n = `${name} (copia ${k})`;
+    files[n] = saved.json;
+    return store.set(KEY_FILES, files) ? `La patch che avevi aperta è salvata in File come \u201c${n}\u201d.` : "";
+  }
+  window.PE.ready.then(async (full) => {
     const saved = store.get(KEY_CURRENT, null);
+    let json = null, note = "";
+    if (linkName) {
+      try {
+        const r = await fetch(`patches/${linkName}.maxpat`, { cache: "no-cache" });
+        if (r.ok) json = await r.json();
+      } catch (e) { json = null; }
+    }
+    if (linked) history.replaceState(null, "", location.pathname);
     const reopen = !!(saved && saved.json && saved.json.patcher);
-    if (reopen) openPatch(saved.json, saved.name || "patch");
-    else openPatch(window.EXAMPLE_PATCH, "simple_monoSynth");
+    if (json && json.patcher) { note = keepUnsaved(saved); openPatch(json, linkName); }
+    else {
+      if (linked) note = `Non trovo la patch \u201c${linked}\u201d di questo link.`;
+      if (reopen) { openPatch(saved.json, saved.name || "patch"); edited = saved.edited ?? saved.name !== "simple_monoSynth"; }
+      else openPatch(window.EXAMPLE_PATCH, "simple_monoSynth");
+    }
     setLocked(true);
     requestAnimationFrame(tick);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { renderAll(); });
     if (!full) log("Attenzione: questo browser non carica l'audio completo (niente modulazione di fase).");
-    log(reopen ? "Premi ? per l'aiuto." : EXAMPLE_HINT);
+    log(note || (json || reopen ? "Premi ? per l'aiuto." : EXAMPLE_HINT));
   });
   window.__patcher = { patch, setLocked, openPatch, newBox, get zoom() { return zoom; } };
 })();

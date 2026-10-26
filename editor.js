@@ -596,7 +596,6 @@
     input.setAttribute("autocapitalize", "off");
     input.setAttribute("autocorrect", "off");
     input.spellcheck = false;
-    if (e.box.maxclass === "newobj") input.setAttribute("list", "objnames");
     input.value = e.box.text || "";
     // Readable at any zoom: the field sits over the box but keeps a 16px font
     // (smaller fonts make phones zoom the page when the field gets focus).
@@ -606,7 +605,9 @@
     });
     stage.append(input);
     editing = { entry: e, input, isNew };
+    if (e.box.maxclass === "newobj") input.addEventListener("input", () => suggest(input));
     input.addEventListener("keydown", (ev) => {
+      if (sugInput === input && suggestKey(ev)) { ev.preventDefault(); ev.stopPropagation(); return; }
       if (ev.key === "Enter") { ev.preventDefault(); commitEdit(); }
       else if (ev.key === "Escape") { ev.preventDefault(); cancelEdit(); }
       ev.stopPropagation();
@@ -618,6 +619,7 @@
     if (!editing) return;
     const { entry, input, isNew } = editing;
     editing = null;
+    hideSuggest();
     input.remove();
     if (isNew) { patch.removeBox(entry.box.id); els.get(entry.box.id)?.remove(); els.delete(entry.box.id); undoStack.pop(); renderCords(); }
   }
@@ -625,6 +627,7 @@
     if (!editing) return;
     const { entry, input, isNew } = editing;
     editing = null;
+    hideSuggest();
     const text = input.value.trim();
     input.remove();
     const b = entry.box;
@@ -665,6 +668,70 @@
     applyZoom();
     scheduleAutosave();
   }
+
+  // ------------------------------------------------------------ object names while typing
+  // The names that start with what is typed (none while the box is empty).
+  // The list goes above the box when there is less room below it: on a
+  // phone the keyboard covers the lower part of the screen.
+  const sug = document.createElement("ul");
+  sug.id = "suggest";
+  sug.hidden = true;
+  document.body.append(sug);
+  let sugInput = null, sugAt = -1, sugDown = true;
+  function hideSuggest() { sug.hidden = true; sugInput = null; sugAt = -1; }
+  function suggest(input) {
+    const word = input.value.trimStart().toLowerCase();
+    const found = word && !/\s/.test(word) ? names.filter((n) => n.toLowerCase().startsWith(word) && n.toLowerCase() !== word) : [];
+    if (!found.length) { hideSuggest(); return; }
+    sug.replaceChildren(...found.map((n) => { const li = document.createElement("li"); li.textContent = n; li.dataset.n = n; return li; }));
+    sugInput = input; sugAt = -1;
+    sug.hidden = false;
+    sug.scrollTop = 0;
+    placeSuggest();
+  }
+  function placeSuggest() {
+    if (!sugInput) return;
+    const r = sugInput.getBoundingClientRect(), vv = window.visualViewport;
+    const top = vv ? vv.offsetTop : 0, bottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+    const left = vv ? vv.offsetLeft : 0, right = vv ? vv.offsetLeft + vv.width : window.innerWidth;
+    const need = Math.min(sug.children.length, 6) * 32 + 8;
+    const below = bottom - r.bottom - 4, above = r.top - top - 4;
+    sugDown = below >= need || below >= above;
+    sug.style.maxHeight = Math.max(40, Math.min(need, sugDown ? below : above)) + "px";
+    const h = sug.offsetHeight, w = sug.offsetWidth;
+    sug.style.left = Math.max(left + 4, Math.min(r.left, right - w - 4)) + "px";
+    sug.style.top = (sugDown ? r.bottom + 2 : r.top - 2 - h) + "px";
+  }
+  function chooseSuggest(n) {
+    const input = sugInput;
+    if (!input) return;
+    input.value = n + " ";
+    hideSuggest();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+  // keyboard: arrows move in the list, Enter or Tab take the marked name
+  function suggestKey(ev) {
+    const items = sug.children, n = items.length;
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      const step = ev.key === "ArrowDown" ? 1 : -1;
+      sugAt = sugAt < 0 ? (step > 0 ? 0 : n - 1) : (sugAt + step + n) % n;
+      [...items].forEach((li, i) => li.classList.toggle("on", i === sugAt));
+      items[sugAt].scrollIntoView({ block: "nearest" });
+      return true;
+    }
+    if ((ev.key === "Enter" || ev.key === "Tab") && sugAt >= 0) { chooseSuggest(items[sugAt].dataset.n); return true; }
+    if (ev.key === "Escape") { hideSuggest(); return true; }
+    return false;
+  }
+  sug.addEventListener("mousedown", (ev) => ev.preventDefault()); // keeps the focus (and the phone keyboard) in the box
+  sug.addEventListener("click", (ev) => { const li = ev.target.closest("li"); if (li) chooseSuggest(li.dataset.n); });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", placeSuggest);
+    window.visualViewport.addEventListener("scroll", placeSuggest);
+  }
+  window.addEventListener("resize", placeSuggest);
+  stage.addEventListener("scroll", placeSuggest);
 
   // ------------------------------------------------------------ creating boxes
   function visibleCenter() {
@@ -803,6 +870,7 @@
       if (!e) return;
       if (operate && !outEl) {
         ev.preventDefault();
+        if (locked && ev.pointerType !== "mouse" && e.inst.passive) { startPan(ev); return; }
         const h = e.inst.press(ev, pt);
         if (h) startDrag(ev, h);
         return;
@@ -817,6 +885,12 @@
         insertion = { x: Math.round(pt.x), y: Math.round(pt.y) };
         placeMarker();
         if (dbl) { newBox("newobj", insertion); return; }
+        // touch: a drag on a panel not yet selected moves the view, a tap selects it
+        if (ev.pointerType !== "mouse" && !selection.has(id) && !ev.shiftKey) {
+          setSelection([]);
+          startPan(ev, () => setSelection([id]));
+          return;
+        }
       }
       if (dbl && hasText(e)) { editText(e, false); return; }
       if (ev.shiftKey) {
@@ -839,13 +913,18 @@
   });
 
   // ------------------------------------------------------------ touch: pan with one finger, pinch with two
-  function startPan(ev) {
+  // onTap: called when the finger lifts without having moved
+  function startPan(ev, onTap) {
     const sx = stage.scrollLeft, sy = stage.scrollTop, x0 = ev.clientX, y0 = ev.clientY;
+    let moved = false;
     startDrag(ev, {
       move(e2) {
+        if (!moved && Math.abs(e2.clientX - x0) + Math.abs(e2.clientY - y0) < 6) return;
+        moved = true;
         stage.scrollLeft = sx - (e2.clientX - x0);
         stage.scrollTop = sy - (e2.clientY - y0);
       },
+      up() { if (!moved && onTap) onTap(); },
     });
   }
   const touches = new Map();
@@ -1203,10 +1282,8 @@
     rd.readAsText(file);
   });
 
-  // object names: autocomplete list and help list
+  // object names: suggestions while typing and help list
   const names = [...Object.keys(NEWOBJ), ...Object.keys(GUI)].sort();
-  const dl = $("#objnames");
-  names.forEach((n) => { const o = document.createElement("option"); o.value = n; dl.append(o); });
   const ol = $("#objlist");
   names.forEach((n) => { const li = document.createElement("li"); li.textContent = n; ol.append(li); });
 

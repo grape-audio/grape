@@ -146,6 +146,8 @@
     build() {}
     draw() {}
     press() { return null; }
+    // nothing happens on a press: in a locked patch a drag here moves the view
+    get passive() { return this.press === Obj.prototype.press; }
     loadbang() {}
   }
 

@@ -12,17 +12,14 @@ Nothing to install.
 
 - About 100 objects: oscillators, filters,
   envelopes, delay, reverb, pitch shift,
-  sound file players, live sampling
-  (`buffer~`, `record~`, `groove~`),
-  logic and math, MIDI-style helpers
+  sound file players, live sampling,
+  logic and math
 - Interface objects: dials, sliders, number boxes,
   toggles, buttons, keyboard, faders,
   meters, oscilloscope, spectrum
 - Patching mode and presentation mode,
   locked and edit views
 - Record what you hear to MP3 or WAV
-- Opens and saves `.maxpat` files
-  (only the objects listed above)
 - Touch: tap, drag, pinch to zoom,
   one finger to move the view
 - Patches are kept in the browser;

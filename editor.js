@@ -10,6 +10,7 @@
   const SVGNS = "http://www.w3.org/2000/svg";
   const KEY_CURRENT = "patcher-classe:current";
   const KEY_FILES = "patcher-classe:files";
+  const KEY_INFO = "patcher-classe:info";
   const IOW = 9;
 
   // ------------------------------------------------------------ storage (may be unavailable)
@@ -355,6 +356,7 @@
     canvas.style.width = W + "px";
     canvas.style.height = H + "px";
     canvas.style.transform = `scale(${zoom})`;
+    canvas.style.setProperty("--iz", 1 / zoom);
     sizer.style.width = W * zoom + "px";
     sizer.style.height = H * zoom + "px";
     cordsSvg.setAttribute("width", W);
@@ -516,6 +518,7 @@
     for (const e of order) renderBox(e);
     applyZoom();
     renderCords();
+    updateAssist();
   }
 
   // ------------------------------------------------------------ undo / autosave
@@ -569,6 +572,7 @@
     for (const [id, el] of els) el.classList.toggle("sel", selection.has(id));
     showPresentButton();
     if (selection.size) { selCord = null; renderCords(); }
+    updateAssist();
   }
   function selectCord(l) { selCord = l; setSelection([]); renderCords(); }
 
@@ -580,6 +584,7 @@
     $("#lock-label").textContent = locked ? "Bloccata" : "Modifica";
     $("#lock-shackle").setAttribute("d", locked ? "M8 11V8a4 4 0 0 1 8 0v3" : "M8 11V8a4 4 0 0 1 7.5-2");
     if (locked) { commitEdit(); setSelection([]); selCord = null; renderCords(); marker.classList.remove("show"); }
+    updateAssist();
   }
   $("#lock").addEventListener("click", () => setLocked(!locked));
 
@@ -605,6 +610,7 @@
     });
     stage.append(input);
     editing = { entry: e, input, isNew };
+    updateAssist();
     if (e.box.maxclass === "newobj") input.addEventListener("input", () => suggest(input));
     input.addEventListener("keydown", (ev) => {
       if (sugInput === input && suggestKey(ev)) { ev.preventDefault(); ev.stopPropagation(); return; }
@@ -622,6 +628,7 @@
     hideSuggest();
     input.remove();
     if (isNew) { patch.removeBox(entry.box.id); els.get(entry.box.id)?.remove(); els.delete(entry.box.id); undoStack.pop(); renderCords(); }
+    updateAssist();
   }
   function commitEdit() {
     if (!editing) return;
@@ -667,6 +674,7 @@
     renderCords();
     applyZoom();
     scheduleAutosave();
+    updateAssist();
   }
 
   // ------------------------------------------------------------ object names while typing
@@ -732,6 +740,78 @@
   }
   window.addEventListener("resize", placeSuggest);
   stage.addEventListener("scroll", placeSuggest);
+
+  // ------------------------------------------------------------ what inlets and outlets are for
+  // In edit mode, with one object selected, a bar above the messages says
+  // what the object does and what each inlet and outlet is for, and small
+  // numbers on the object show which is which. Hovering an inlet or outlet
+  // with the mouse, or dragging a cord, shows just the line that matters.
+  const assistEl = $("#assist");
+  const QUIET = new Set(["panel", "comment"]); // nothing useful to say
+  let assistSel = null, assistFocus = null;
+  // the Info button turns all of this on and off (remembered in this browser)
+  let assistOn = store.get(KEY_INFO, true) !== false;
+  const infoBtn = $("#info");
+  function showInfoButton() { infoBtn.classList.toggle("on", assistOn); infoBtn.setAttribute("aria-pressed", String(assistOn)); }
+  showInfoButton();
+  infoBtn.addEventListener("click", () => { assistOn = !assistOn; store.set(KEY_INFO, assistOn); showInfoButton(); updateAssist(); });
+  function assistOf(e) {
+    if (!assistOn || !window.ASSIST || !e || QUIET.has(e.box.maxclass)) return null;
+    return window.ASSIST.describe(e.inst.name, e.inst);
+  }
+  function numTag(k, cls) { const n = document.createElement("span"); n.className = cls; n.textContent = k + 1; return n; }
+  function assistRow(label, none, list) {
+    const r = document.createElement("div"), b = document.createElement("b");
+    b.textContent = label + ": ";
+    r.append(b);
+    if (!list.length) r.append(none);
+    // short items stay on one line; long ones may wrap
+    list.forEach((t, k) => { const it = document.createElement("span"); it.className = t.length > 28 ? "ai" : "ai nw"; it.append(numTag(k, "an"), "\u00a0" + t); r.append(it); });
+    return r;
+  }
+  function renderAssist() {
+    const f = assistFocus || (assistSel ? { e: assistSel } : null);
+    const D = f && assistOf(f.e);
+    if (!D) { assistEl.hidden = true; return; }
+    const head = document.createElement("div"), b = document.createElement("b");
+    b.textContent = f.e.inst.name;
+    head.append(b);
+    assistEl.replaceChildren(head);
+    if (f.kind) {
+      const list = f.kind === "in" ? D.ins : D.outs;
+      head.append(` · ${f.kind === "in" ? "ingresso" : "uscita"} `, numTag(f.k, "an"), " " + (list[f.k] || ""));
+    } else {
+      head.append(" – " + D.d);
+      assistEl.append(assistRow("Ingressi", "nessuno", D.ins), assistRow("Uscite", "nessuna", D.outs));
+    }
+    assistEl.hidden = false;
+  }
+  function updateAssist() {
+    const one = selection.size === 1 ? patch.entries.get([...selection][0]) : null;
+    assistSel = !locked && !editing && one && assistOf(one) ? one : null;
+    canvas.querySelectorAll(".port-n").forEach((n) => n.remove());
+    const el = assistSel && els.get(assistSel.box.id);
+    if (el) {
+      el.querySelectorAll(".inlet").forEach((d, k) => d.append(numTag(k, "port-n")));
+      el.querySelectorAll(".outlet").forEach((d, k) => d.append(numTag(k, "port-n")));
+    }
+    renderAssist();
+  }
+  canvas.addEventListener("pointerover", (ev) => {
+    if (locked || drag || ev.pointerType !== "mouse") return;
+    const p = ev.target.closest(".inlet, .outlet"), el = p && p.closest(".box"), e = el && patch.entries.get(el.dataset.id);
+    if (!e) return;
+    const kind = p.classList.contains("inlet") ? "in" : "out";
+    assistFocus = { e, kind, k: [...el.querySelectorAll(kind === "in" ? ".inlet" : ".outlet")].indexOf(p) };
+    renderAssist();
+  });
+  canvas.addEventListener("pointerout", (ev) => {
+    if (!assistFocus || drag) return;
+    const p = ev.target.closest(".inlet, .outlet");
+    if (!p || (ev.relatedTarget && p.contains(ev.relatedTarget))) return;
+    assistFocus = null;
+    renderAssist();
+  });
 
   // ------------------------------------------------------------ creating boxes
   function visibleCenter() {
@@ -1008,10 +1088,26 @@
     const y1 = r[1] + r[3];
     const temp = mkPath("", "cord-temp");
     cordsSvg.append(temp);
+    // the bar shows the outlet, then the inlet the cord would go to
+    let near = null;
+    const focusOn = (t) => {
+      const el = t && els.get(t[0]), port = el && el.querySelectorAll(".inlet")[t[1]];
+      canvas.querySelectorAll(".inlet.hl").forEach((d) => d.classList.remove("hl"));
+      if (port && assistOn) port.classList.add("hl");
+      assistFocus = t ? { e: patch.entries.get(t[0]), kind: "in", k: t[1] } : { e: s, kind: "out", k: o };
+      renderAssist();
+    };
+    const unfocus = () => { canvas.querySelectorAll(".inlet.hl").forEach((d) => d.classList.remove("hl")); assistFocus = null; renderAssist(); };
+    focusOn(null);
     startDrag(ev, {
-      move(e2, pt) { temp.setAttribute("d", cordPath(x1, y1, pt.x, pt.y)); },
+      move(e2, pt) {
+        temp.setAttribute("d", cordPath(x1, y1, pt.x, pt.y));
+        const t = nearestInlet(pt, id);
+        if (String(t) !== String(near)) { near = t; focusOn(t); }
+      },
       up(e2, pt) {
         temp.remove();
+        unfocus();
         const t = nearestInlet(pt, id);
         if (!t) return;
         if (!patch.canConnect(id, o, t[0], t[1])) {
@@ -1025,7 +1121,7 @@
         renderCords();
         scheduleAutosave();
       },
-      cancel() { temp.remove(); },
+      cancel() { temp.remove(); unfocus(); },
     });
   }
 

@@ -744,8 +744,9 @@
   // ------------------------------------------------------------ what inlets and outlets are for
   // In edit mode, with one object selected, a bar above the messages says
   // what the object does and what each inlet and outlet is for, and small
-  // numbers on the object show which is which. Hovering an inlet or outlet
-  // with the mouse, or dragging a cord, shows just the line that matters.
+  // numbers on the object show which is which. While a cord is dragged it
+  // shows just the line that matters. (Not on mouse hover: the bar kept
+  // changing while the pointer crossed the objects.)
   const assistEl = $("#assist");
   const QUIET = new Set(["panel", "comment"]); // nothing useful to say
   let assistSel = null, assistFocus = null;
@@ -797,21 +798,6 @@
     }
     renderAssist();
   }
-  canvas.addEventListener("pointerover", (ev) => {
-    if (locked || drag || ev.pointerType !== "mouse") return;
-    const p = ev.target.closest(".inlet, .outlet"), el = p && p.closest(".box"), e = el && patch.entries.get(el.dataset.id);
-    if (!e) return;
-    const kind = p.classList.contains("inlet") ? "in" : "out";
-    assistFocus = { e, kind, k: [...el.querySelectorAll(kind === "in" ? ".inlet" : ".outlet")].indexOf(p) };
-    renderAssist();
-  });
-  canvas.addEventListener("pointerout", (ev) => {
-    if (!assistFocus || drag) return;
-    const p = ev.target.closest(".inlet, .outlet");
-    if (!p || (ev.relatedTarget && p.contains(ev.relatedTarget))) return;
-    assistFocus = null;
-    renderAssist();
-  });
 
   // ------------------------------------------------------------ creating boxes
   function visibleCenter() {

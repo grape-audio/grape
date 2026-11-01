@@ -225,11 +225,15 @@
   .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
   .objlist { columns: 3 9em; font: 13px ui-monospace, "DejaVu Sans Mono", monospace; padding-left: 1em; }
   @media (max-width: 700px) {
+    #name { display: none; }
+    .tb { white-space: nowrap; }
+  }
+  /* touch screens: one row that scrolls sideways with the finger; with a
+     mouse a narrow window keeps the rows, so every button stays reachable */
+  @media (max-width: 700px) and (pointer: coarse) {
     #bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
     #bar::-webkit-scrollbar { display: none; }
     #bar .group { flex-wrap: nowrap; }
-    #name { display: none; }
-    .tb { white-space: nowrap; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>

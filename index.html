@@ -180,10 +180,12 @@
   /* what the inlets and outlets of the selected object are for */
   #assist {
     background: #1f1f1f; color: var(--bar-fg); font: 13px var(--ui); line-height: 1.45;
-    padding-block: 6px; max-height: 30vh; overflow-y: auto; border-top: 1px solid #1a1a1a;
+    padding-block: 6px; height: calc(3 * 1.45em + 12px); box-sizing: border-box; overflow-y: auto; border-top: 1px solid #1a1a1a;
     padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
   }
   #assist b { color: #fff; font-weight: 700; }
+  #assist .dim { color: var(--bar-dim); }
+  @media (max-width: 700px) { #assist { height: calc(4 * 1.45em + 12px); } }
   #assist .ai { margin-right: 10px; }
   #assist .ai.nw { white-space: nowrap; }
   .an, .port-n {

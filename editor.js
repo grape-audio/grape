@@ -770,10 +770,20 @@
     list.forEach((t, k) => { const it = document.createElement("span"); it.className = t.length > 28 ? "ai" : "ai nw"; it.append(numTag(k, "an"), "\u00a0" + t); r.append(it); });
     return r;
   }
+  // The bar keeps the same height while it is on (Info on, patch unlocked),
+  // so the patch above it does not move when the text changes.
   function renderAssist() {
+    if (!assistOn || locked) { assistEl.hidden = true; return; }
+    assistEl.hidden = false;
     const f = assistFocus || (assistSel ? { e: assistSel } : null);
     const D = f && assistOf(f.e);
-    if (!D) { assistEl.hidden = true; return; }
+    if (!D) {
+      const hint = document.createElement("div");
+      hint.className = "dim";
+      hint.textContent = "Seleziona un oggetto: qui vedi cosa fa e a cosa servono i suoi ingressi e le sue uscite.";
+      assistEl.replaceChildren(hint);
+      return;
+    }
     const head = document.createElement("div"), b = document.createElement("b");
     b.textContent = f.e.inst.name;
     head.append(b);
@@ -785,7 +795,7 @@
       head.append(" – " + D.d);
       assistEl.append(assistRow("Ingressi", "nessuno", D.ins), assistRow("Uscite", "nessuna", D.outs));
     }
-    assistEl.hidden = false;
+    assistEl.scrollTop = 0;
   }
   function updateAssist() {
     const one = selection.size === 1 ? patch.entries.get([...selection][0]) : null;

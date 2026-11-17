@@ -781,6 +781,72 @@
     destroy() { keyObjs.delete(this); }
   }
 
+  // notein [channel]: note messages from MIDI keyboards (Web MIDI: Chrome,
+  // Edge, Firefox; Safari has none). Outlets, sent right to left: channel
+  // (only without a channel argument), velocity (0 for note-off), pitch.
+  // Port arguments and messages are accepted; every MIDI input is heard.
+  const noteinObjs = new Set();
+  let midiAccess = null, midiAsked = false;
+  const midiPorts = new Map();
+  function midiLog(text) {
+    const o = noteinObjs.values().next().value;
+    if (o) o.patch.log(text);
+  }
+  function midiNote(e) {
+    const d = e.data;
+    if (!d || d.length < 3) return;
+    const type = d[0] & 0xf0;
+    if (type !== 0x90 && type !== 0x80) return;
+    const ch = (d[0] & 0x0f) + 1, vel = type === 0x80 ? 0 : d[2];
+    for (const o of [...noteinObjs]) o.fire(d[1], vel, ch);
+  }
+  function midiListen() {
+    for (const inp of midiAccess.inputs.values()) inp.onmidimessage = midiNote;
+  }
+  function midiStart() {
+    if (midiAsked) return;
+    midiAsked = true;
+    if (!navigator.requestMIDIAccess) {
+      midiLog("notein: questo browser non riceve il MIDI. Usa Chrome, Edge o Firefox.");
+      return;
+    }
+    navigator.requestMIDIAccess().then((access) => {
+      midiAccess = access;
+      midiListen();
+      const names = [];
+      for (const inp of access.inputs.values()) { midiPorts.set(inp.id, inp.state); names.push(inp.name || "MIDI"); }
+      midiLog(names.length ? `MIDI: ${names.join(", ")}.` : "MIDI: nessuna tastiera collegata.");
+      access.onstatechange = (e) => {
+        const port = e.port;
+        if (!port || port.type !== "input") return;
+        midiListen();
+        if (midiPorts.get(port.id) === port.state) return;
+        midiPorts.set(port.id, port.state);
+        midiLog(`MIDI: ${port.name || "tastiera"} ${port.state === "connected" ? "collegata" : "scollegata"}.`);
+      };
+    }, () => {
+      midiAsked = false;
+      midiLog("notein: il browser non ha dato il permesso di usare il MIDI.");
+    });
+  }
+  class Notein extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      const n = a.find((x) => typeof x === "number");
+      this.ch = n >= 1 ? (Math.trunc(n) - 1) % 16 + 1 : 0;
+      this.outTypes = this.ch ? ["int", "int"] : ["int", "int", "int"];
+      noteinObjs.add(this);
+      midiStart();
+    }
+    fire(pitch, vel, ch) {
+      if (this.ch && ch !== this.ch) return;
+      if (!this.ch) this.out(2, [ch]);
+      this.out(1, [vel]);
+      this.out(0, [pitch]);
+    }
+    destroy() { noteinObjs.delete(this); }
+  }
+
   class Print extends Obj {
     constructor(p, b, a) { super(p, b, a); this.label = a.length ? String(a[0]) : "print"; this.outTypes = []; }
     receive(i, m) { this.patch.log(this.label + ": " + fmtMsg(m)); }
@@ -3821,6 +3887,7 @@
     "!=": (p, b, a) => new Compare(p, b, a, "!="),
     "makenote": (p, b, a) => new Makenote(p, b, a),
     "key": (p, b, a) => new KeyObj(p, b, a),
+    "notein": (p, b, a) => new Notein(p, b, a),
     "print": (p, b, a) => new Print(p, b, a),
     "loadbang": (p, b, a) => new Loadbang(p, b, a),
     "loadmess": (p, b, a) => new Loadmess(p, b, a),

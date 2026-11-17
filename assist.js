@@ -142,6 +142,11 @@
       i: [],
       o: ["codice del carattere", "codice del tasto", "tasti speciali premuti insieme (Shift, Ctrl…)", "codice del tasto, uguale su ogni computer"],
     },
+    "notein": {
+      d: "le note suonate su una tastiera MIDI collegata al computer",
+      i: ["nessuna funzione: riceve da tutte le tastiere MIDI"],
+      o: (x) => ["altezza della nota (0–127)", "velocity (0 quando lasci il tasto)", "canale MIDI"].slice(0, nOut(x)),
+    },
     "print": { d: "scrive i messaggi nella barra in fondo", i: ["messaggio da scrivere"], o: [] },
     "loadbang": { d: "manda un bang quando si apre la patch", i: ["bang: lo manda di nuovo"], o: ["bang all'apertura"] },
     "loadmess": { d: "manda un messaggio quando si apre la patch", i: ["bang: lo manda di nuovo · set: cambia il messaggio"], o: ["il messaggio scritto dopo il nome"] },

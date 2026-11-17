@@ -89,6 +89,7 @@
     background: var(--accent); border: 2px solid #fff; border-radius: 3px; box-sizing: border-box; cursor: nwse-resize; }
   .rsz::after { content: ""; position: absolute; inset: -12px; }
   body.editing .box.sel > .rsz { display: block; }
+  .rsz.rsz-w { cursor: ew-resize; }
   .k-obj {
     background: var(--obj); color: var(--obj-fg); border-radius: 4px;
     border-top: 3px solid var(--obj-edge); border-bottom: 3px solid var(--obj-edge);
@@ -125,7 +126,7 @@
   .dial-ring { stroke: #5a5a5a; stroke-width: 3; fill: none; stroke-linecap: round; }
   .dial-val { stroke: #c9c9c9; stroke-width: 3; fill: none; stroke-linecap: round; }
   .dial-needle { stroke: #e6e6e6; stroke-width: 2; stroke-linecap: round; }
-  .mc-number, .mc-flonum { display: flex; align-items: center; gap: 3px; color: #f2f2f2; font-size: 12px; padding: 0 4px; border-top: 3px solid var(--obj-edge); border-bottom: 3px solid var(--obj-edge); border-radius: 4px; }
+  .mc-number, .mc-flonum, .mc-number\~ { display: flex; align-items: center; gap: 3px; color: #f2f2f2; font-size: 12px; padding: 0 4px; border-top: 3px solid var(--obj-edge); border-bottom: 3px solid var(--obj-edge); border-radius: 4px; }
   .num-tri { color: #9a9a9a; font-size: 10px; }
   .mc-toggle .tgl-x { stroke: transparent; stroke-width: 2.5; stroke-linecap: round; }
   .mc-toggle.on .tgl-x { stroke: #e6e6e6; }
@@ -360,8 +361,9 @@
       <li>Nuovo oggetto: tocca un punto vuoto, poi <b>Oggetto</b>. Oppure doppio clic su un punto vuoto, o il tasto <code>N</code>. Scrivi nome e argomenti, come in Max (<code>cycle~ 440</code>), poi Invio.</li>
       <li>Collegare: trascina dall'uscita in basso di un oggetto fino all'ingresso in alto di un altro.</li>
       <li>Spostare: trascina l'oggetto. Cambiare il testo: doppio clic (o doppio tocco) sull'oggetto.</li>
+      <li>Dimensioni: tocca l'oggetto e trascina il quadratino blu nell'angolo in basso a destra. Oggetti, messaggi, commenti e numeri cambiano solo la larghezza, come in Max.</li>
       <li>Eliminare: tocca oggetto o cavo, poi <b>Elimina</b> (o il tasto Canc).</li>
-      <li>Pannello colorato (per raggruppare una parte della patch): nuovo oggetto, scrivi <code>panel</code> e Invio. Per un altro colore crealo scrivendo per esempio <code>panel @bgcolor 0.5 0.8 0.5 0.6</code> (rosso, verde, blu, opacità, da 0 a 1). Per cambiare le dimensioni: tocca il pannello e trascina il quadratino blu nell'angolo in basso a destra.</li>
+      <li>Pannello colorato (per raggruppare una parte della patch): nuovo oggetto, scrivi <code>panel</code> e Invio. Per un altro colore crealo scrivendo per esempio <code>panel @bgcolor 0.5 0.8 0.5 0.6</code> (rosso, verde, blu, opacità, da 0 a 1).</li>
       <li>Un oggetto con il bordo rosso tratteggiato non esiste qui, oppure il nome è sbagliato.</li>
       <li><b>Info</b> acceso: tocca un oggetto e in basso vedi cosa fa e a cosa servono i suoi ingressi e uscite, numerati anche sull'oggetto. Mentre tiri un cavo vedi l'ingresso a cui stai arrivando. Premi <b>Info</b> per spegnerlo.</li>
     </ol>

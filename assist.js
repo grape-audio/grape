@@ -272,6 +272,11 @@
     "slider": RANGED("cursore"),
     "number": NUMBOX("intero"),
     "flonum": NUMBOX("decimale"),
+    "number~": {
+      d: "mostra il valore di un segnale (\u223f) oppure genera un segnale costante (\u25be): clic a sinistra per cambiare",
+      i: ["segnale da mostrare · numero: diventa il segnale in uscita", "tempo di rampa in ms per i numeri che arrivano"],
+      o: ["segnale costante", "valore del segnale in ingresso, ogni 100 ms"],
+    },
     "toggle": { d: "interruttore: acceso 1, spento 0", i: ["numero: 0 spento, altro acceso (e lo fa uscire) · bang: cambia stato"], o: ["1 acceso, 0 spento"] },
     "button": { d: "pulsante", i: ["qualsiasi messaggio: fa uscire un bang"], o: ["bang"] },
     "ezdac~": { d: "accende e spegne l'audio · uscita verso altoparlanti o cuffie", i: ["canale sinistro (segnale)", "canale destro (segnale)"], o: [] },
@@ -284,7 +289,7 @@
     },
     "panel": { d: "pannello colorato di sfondo", i: [NOTHING], o: [] },
     "scope~": { d: "oscilloscopio", i: ["segnale da mostrare", NOTHING], o: [] },
-    "live.scope~": { d: "oscilloscopio", i: ["segnale da mostrare", NOTHING], o: [NOTHING] },
+    "live.scope~": { d: "oscilloscopio che scorre", i: ["segnale da mostrare · samples: quanti campioni mostra (88200 = 2 s a 44,1 kHz)", NOTHING], o: [NOTHING] },
     "meter~": { d: "misuratore di livello", i: ["segnale da misurare"], o: ["picco, a ogni intervallo"] },
     "spectroscope~": { d: "analizzatore di spettro", i: ["segnale da analizzare", NOTHING], o: [NOTHING] },
     "live.gain~": {

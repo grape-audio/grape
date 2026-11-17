@@ -2791,6 +2791,107 @@
     }
   }
 
+  // number~: signal monitor and constant generator, as in Max. Left inlet:
+  // a signal to show, or a number that becomes the constant signal of the
+  // left outlet (with the ramp time of the right inlet, in ms). Right outlet:
+  // the incoming signal as a number, every interval (100 ms) while audio is on.
+  // Display modes (box attribute mode): 1 shows the output value and can be
+  // dragged, 2 shows the incoming signal. A click on the left part switches.
+  class NumberSig extends Obj {
+    constructor(p, b, a) {
+      super(p, b, a);
+      this.nin = 2;
+      this.outTypes = ["signal", "float"];
+      this.sigIn = new Set([0]);
+      this.v = typeof b.sig === "number" ? b.sig : 0;
+      this.src = konst(this.v);
+      this.src.connect(sink);
+      this.an = AC.createAnalyser();
+      this.an.fftSize = 128;
+      this.an.connect(sink);
+      this.buf = new Float32Array(128);
+      this.seen = 0;
+      this.ramp = typeof b.ft1 === "number" ? Math.max(0, b.ft1) : 0;
+      this.lo = typeof b.minimum === "number" ? b.minimum : null;
+      this.hi = typeof b.maximum === "number" ? b.maximum : null;
+      const ms = typeof b.interval === "number" && b.interval > 0 ? b.interval : 100;
+      this.t = setInterval(() => this.tick(), ms);
+    }
+    get mode() { return this.box.mode === 1 ? 1 : 2; }
+    build(el) {
+      el.innerHTML = '<span class="num-tri"></span><span class="num-val"></span>';
+      this.tri = el.querySelector(".num-tri");
+      this.label = el.querySelector(".num-val");
+      this.render();
+    }
+    text(v = this.mode === 1 ? this.v : this.seen) {
+      const nd = this.battr("numdecimalplaces", 0);
+      if (nd > 0) return v.toFixed(nd);
+      const s = String(Math.round(v * 1000) / 1000);
+      return s.includes(".") || s.includes("e") ? s : s + ".";
+    }
+    render() {
+      if (this.tri) this.tri.textContent = this.mode === 1 ? "▾" : "∿";
+      if (this.label) this.label.textContent = this.text();
+    }
+    tick() {
+      if (AC.state !== "running" || !this.sigCount[0]) return;
+      this.an.getFloatTimeDomainData(this.buf);
+      this.seen = this.buf[0];
+      if (this.mode === 2) this.render();
+      this.out(1, [this.seen]);
+    }
+    set(v) {
+      if (this.lo !== null && v < this.lo) v = this.lo;
+      if (this.hi !== null && v > this.hi) v = this.hi;
+      this.v = v;
+      this.box.sig = v;
+      const pm = this.src.offset;
+      if (this.ramp > 0) {
+        const t = AC.currentTime;
+        pm.cancelScheduledValues(t);
+        pm.setValueAtTime(pm.value, t);
+        pm.linearRampToValueAtTime(v, t + this.ramp / 1000);
+      } else jumpParam(pm, v);
+      this.render();
+    }
+    receive(i, m) {
+      const s = sel(m), x = num(m.slice(1));
+      if (i === 1) {
+        if (!isNum(m)) return this.nope(m);
+        this.ramp = Math.max(0, m[0]);
+        this.box.ft1 = this.ramp;
+        return;
+      }
+      if (isBang(m) || s === "allow") return;
+      if (s === "mode") { if (x === 1 || x === 2) { this.box.mode = x; this.render(); } return; }
+      if (s === "min") { this.lo = m.length > 1 ? x : null; return; }
+      if (s === "max") { this.hi = m.length > 1 ? x : null; return; }
+      if (s === "ft1") { this.ramp = Math.max(0, x); this.box.ft1 = this.ramp; return; }
+      if (!isNum(m)) return this.nope(m);
+      if (m.length > 1 && typeof m[1] === "number") { this.ramp = Math.max(0, m[1]); this.box.ft1 = this.ramp; }
+      this.set(m[0]);
+    }
+    press(e, pt) {
+      const r = this.rect();
+      if (pt && pt.x - r[0] < 14) { this.box.mode = this.mode === 1 ? 2 : 1; this.render(); return null; }
+      if (this.mode !== 1) return null;
+      const v0 = this.v;
+      return dragValue(e, 0, (d) => {
+        const v = Number((v0 + Math.round(d) * 0.01).toFixed(2));
+        if (v !== this.v) this.set(v);
+      }, 2, () => this.patch.askNumber(this, (v) => this.set(v)));
+    }
+    sigOut(o) { return o === 0 ? { node: this.src } : null; }
+    sigTarget(i) { return i === 0 ? { node: this.an } : { node: nullIn }; }
+    destroy() {
+      clearInterval(this.t);
+      this.src.stop();
+      this.src.disconnect();
+      this.an.disconnect();
+    }
+  }
+
   class Toggle extends Obj {
     constructor(p, b, a) { super(p, b, a); this.outTypes = ["int"]; this.v = 0; }
     build(el) { this.el = el; el.innerHTML = '<svg class="gui-svg" viewBox="0 0 24 24"><path class="tgl-x" d="M6 6 L18 18 M18 6 L6 18"/></svg>'; this.render(); }
@@ -2872,47 +2973,167 @@
     return [W, H, dpr];
   }
 
-  // scope~: waveform locked on the rising zero crossing. Also the base of live.scope~.
+  // scope~: waveform locked on the rising crossing of the middle level, at any
+  // frequency. Audio-rate signals: 1024 samples from the analyser. Slow signals
+  // (a period longer than 1024 samples, as an LFO): a sweep of two periods,
+  // drawn while it happens, from 4 s of history kept by the "pe-tap" worklet;
+  // the rest of the screen still shows the previous sweep. Without a regular
+  // period the history scrolls (last 2 s). Also the base of live.scope~.
   class AnScope extends Obj {
     constructor(p, b, a) {
       super(p, b, a);
       this.nin = 2;
       this.outTypes = [];
       this.sigIn = new Set([0, 1]);
+      this.inp = AC.createGain();
       this.an = AC.createAnalyser();
       this.an.fftSize = 2048;
       this.an.connect(sink);
+      this.inp.connect(this.an);
       this.buf = new Float32Array(this.an.fftSize);
       const rg = this.box.range;
       this.range = Array.isArray(rg) && rg.length >= 2 ? [Number(rg[0]), Number(rg[1])] : [-1, 1];
+      this.ring = null;
+      this.tap = null;
+      if (WK) this.setupTap();
+    }
+    // scope~: 4 s of history, one sample in 4.
+    setupTap() { this.startTap(4, Math.round(AC.sampleRate)); }
+    startTap(step, size) {
+      this.step = step;
+      this.rate = AC.sampleRate / step;
+      this.ring = new Float32Array(size);
+      this.total = 0; this.scanned = 0; this.armed = false; this.cross = []; this.sweep = null;
+      if (this.tap) { this.tap.port.postMessage({ set: { step } }); return; }
+      this.tap = wnode("pe-tap", 1, 1, { step });
+      this.tap.connect(sink);
+      this.tap.port.onmessage = (e) => this.collect(e.data);
+      this.inp.connect(this.tap);
     }
     build(el) { this.canvas = document.createElement("canvas"); this.canvas.className = "gui-canvas"; el.append(this.canvas); }
     receive(i, m) { if (sel(m) === "range" && m.length >= 3) this.range = [num(m.slice(1)), num(m.slice(2))]; }
-    sigTarget(i) { return i === 0 ? { node: this.an } : { node: nullIn }; }
+    sigTarget(i) { return i === 0 ? { node: this.inp } : { node: nullIn }; }
     yOf(v, H, pad) { const [lo, hi] = this.range; return H - pad - (v - lo) / ((hi - lo) || 1) * (H - 2 * pad); }
+    collect(chunk) {
+      const N = this.ring.length;
+      for (let k = 0; k < chunk.length; k++) this.ring[this.total++ % N] = chunk[k];
+    }
+    at(i) { return this.ring[i % this.ring.length]; }
     draw() {
       const c = this.canvas;
       if (!c) return;
       const [W, H, dpr] = canvasSize(c, this.rect());
       const g = c.getContext("2d");
       g.fillStyle = "#333333"; g.fillRect(0, 0, W, H);
+      g.lineWidth = 1.2 * dpr;
+      if (!this.drawSlow(g, W, H, dpr)) this.drawFast(g, W, H, dpr);
+      g.fillStyle = "#c8e6e9"; g.font = `${10 * dpr}px Arimo, Arial, sans-serif`;
+      g.fillText(this.range[1].toFixed(3), 3 * dpr, 11 * dpr); g.fillText(this.range[0].toFixed(3), 3 * dpr, H - 4 * dpr);
+    }
+    drawFast(g, W, H, dpr) {
       this.an.getFloatTimeDomainData(this.buf);
       const b = this.buf;
-      let start = 0;
-      for (let k = 1; k < b.length / 2; k++) if (b[k - 1] <= 0 && b[k] > 0) { start = k; break; }
+      let lo = Infinity, hi = -Infinity;
+      for (const v of b) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      const mid = (lo + hi) / 2, h = (hi - lo) * 0.1;
+      let start = 0, armed = false;
+      for (let k = 0; k < b.length / 2; k++) {
+        if (b[k] < mid - h) armed = true;
+        else if (armed && b[k] >= mid) { start = k; break; }
+      }
       const n = Math.min(b.length - start, 1024);
-      g.strokeStyle = "#c8e6e9"; g.lineWidth = 1.2 * dpr; g.beginPath();
+      g.strokeStyle = "#c8e6e9"; g.beginPath();
       for (let k = 0; k < n; k++) {
         const x = k / (n - 1) * W, y = this.yOf(b[start + k], H, 2 * dpr);
         if (k) g.lineTo(x, y); else g.moveTo(x, y);
       }
       g.stroke();
-      g.fillStyle = "#c8e6e9"; g.font = `${10 * dpr}px Arimo, Arial, sans-serif`;
-      g.fillText(this.range[1].toFixed(3), 3 * dpr, 11 * dpr); g.fillText(this.range[0].toFixed(3), 3 * dpr, H - 4 * dpr);
     }
-    destroy() { this.an.disconnect(); }
+    // Returns false when the audio-rate view fits better.
+    drawSlow(g, W, H, dpr) {
+      if (!this.ring || !this.total) return false;
+      const N = this.ring.length, total = this.total, n = Math.min(total, N), first = total - n;
+      let lo = Infinity, hi = -Infinity;
+      for (let i = first; i < total; i++) { const v = this.at(i); if (v < lo) lo = v; if (v > hi) hi = v; }
+      if (!(hi - lo > 1e-4)) return false;
+      const mid = (lo + hi) / 2, h = (hi - lo) * 0.1;
+      for (let i = Math.max(this.scanned, first); i < total; i++) {
+        const v = this.at(i);
+        if (v < mid - h) this.armed = true;
+        else if (this.armed && v >= mid) { this.armed = false; this.cross.push(i); }
+      }
+      this.scanned = total;
+      while (this.cross.length && this.cross[0] < first) this.cross.shift();
+      if (this.cross.length > 32) this.cross.splice(0, this.cross.length - 32);
+      const k = this.cross.length;
+      const P = k >= 2 ? this.cross[k - 1] - this.cross[k - 2] : 0;
+      if (P && P * this.step <= 1024) return false;
+      const pad = 2 * dpr;
+      if (!P || P > N) {
+        const m = Math.min(n, Math.round(this.rate * 2));
+        g.strokeStyle = "#c8e6e9";
+        this.trace(g, total - m, 0, m, m, W, H, pad);
+        this.sweep = null;
+        return true;
+      }
+      const len = 2 * P <= N ? 2 * P : P;
+      // a new period (the frequency changed) starts a new sweep at once
+      if (this.sweep && Math.abs(this.sweep.len - len) > len / 4) this.sweep = null;
+      const sw = this.sweep;
+      if (!sw || total - sw.start >= sw.len) {
+        const after = sw ? sw.start + sw.len - P / 2 : -Infinity;
+        let next = null;
+        for (const c of this.cross) if (c >= after) next = c;
+        if (next !== null) this.sweep = { start: next, len, prev: sw ? sw.start : null, prevLen: sw ? sw.len : 0 };
+      }
+      const s = this.sweep;
+      if (!s) return false;
+      const done = Math.min(total - s.start, s.len);
+      if (s.prev !== null && s.prev >= first) {
+        g.strokeStyle = "rgba(200,230,233,0.45)";
+        this.trace(g, s.prev, Math.round(done * s.prevLen / s.len), s.prevLen, s.prevLen, W, H, pad);
+      }
+      g.strokeStyle = "#c8e6e9";
+      this.trace(g, s.start, 0, done, s.len, W, H, pad);
+      return true;
+    }
+    // Draws the history from idx0 + k0 to idx0 + k1 on a screen that holds len
+    // samples; with more samples than pixels, each column shows lowest and highest.
+    trace(g, idx0, k0, k1, len, W, H, pad) {
+      if (k1 - k0 < 2) return;
+      g.beginPath();
+      if (len <= 2 * W) {
+        for (let k = k0; k < k1; k++) {
+          const x = k / (len - 1) * W, y = this.yOf(this.at(idx0 + k), H, pad);
+          if (k > k0) g.lineTo(x, y); else g.moveTo(x, y);
+        }
+      } else {
+        let col = -1, lo = 0, hi = 0, started = false;
+        const flush = () => {
+          const x = col + 0.5;
+          if (started) g.lineTo(x, this.yOf(hi, H, pad)); else { g.moveTo(x, this.yOf(hi, H, pad)); started = true; }
+          g.lineTo(x, this.yOf(lo, H, pad));
+        };
+        for (let k = k0; k < k1; k++) {
+          const cx = Math.floor(k / len * W), v = this.at(idx0 + k);
+          if (cx !== col) { if (col >= 0) flush(); col = cx; lo = hi = v; }
+          else { if (v < lo) lo = v; if (v > hi) hi = v; }
+        }
+        if (col >= 0) flush();
+      }
+      g.stroke();
+    }
+    destroy() {
+      this.inp.disconnect();
+      this.an.disconnect();
+      if (this.tap) { this.tap.port.onmessage = null; this.tap.port.postMessage({ end: 1 }); this.tap.disconnect(); }
+    }
   }
 
+  // live.scope~ (history mode): the last `samples` samples, scrolling to the
+  // left. The box attribute samples (typed as @samples, or the message
+  // samples) sets the time shown; default 2 s. Without worklets: one column
+  // of the display per screen refresh.
   class LiveScope extends AnScope {
     constructor(p, b, a) {
       super(p, b, a);
@@ -2921,15 +3142,41 @@
       this.buf = new Float32Array(this.an.fftSize);
       this.hist = [];
     }
+    setupTap() { this.setSamples(this.box.samples); }
+    // About 2048 values on screen, whatever the time shown.
+    setSamples(v) {
+      const sr = AC.sampleRate;
+      const n = Math.round(Math.min(60 * sr, Math.max(64, typeof v === "number" && v > 0 ? v : 2 * sr)));
+      this.samples = n;
+      const step = Math.max(1, Math.round(n / 2048));
+      this.startTap(step, Math.ceil(n / step) + 512);
+    }
     receive(i, m) {
       super.receive(i, m);
-      if (isBang(m)) this.hist = [];
+      if (sel(m) === "samples" && m.length > 1) {
+        this.box.samples = num(m.slice(1));
+        if (this.ring) this.setSamples(this.box.samples);
+        return;
+      }
+      if (isBang(m)) { this.hist = []; if (this.ring) this.ring.fill(0); }
     }
     draw() {
       const c = this.canvas;
       if (!c) return;
       const r = this.rect();
       const [W, H, dpr] = canvasSize(c, r);
+      if (this.ring) {
+        const g = c.getContext("2d");
+        g.fillStyle = "#282828"; g.fillRect(0, 0, W, H);
+        g.strokeStyle = "#d59200"; g.lineWidth = 1.4 * dpr;
+        const n = Math.ceil(this.samples / this.step), total = this.total;
+        if (total < 2) {
+          g.beginPath(); g.moveTo(0, this.yOf(0, H, 3 * dpr)); g.lineTo(W, this.yOf(0, H, 3 * dpr)); g.stroke();
+          return;
+        }
+        this.trace(g, total - n, Math.max(0, n - total), n, n, W, H, 3 * dpr);
+        return;
+      }
       const keep = Math.max(60, Math.round(r[2]));
       if (AC.state === "running") {
         this.an.getFloatTimeDomainData(this.buf);
@@ -3940,6 +4187,7 @@
     "dial": { make: (p, b, a) => new Dial(p, b, a), size: [40, 40], io: [1, ["float"]], extra: { parameter_enable: 0 } },
     "number": { make: (p, b, a) => new NumBox(p, b, a, false), size: [50, 22], io: [1, ["", "bang"]], extra: { parameter_enable: 0 } },
     "flonum": { make: (p, b, a) => new NumBox(p, b, a, true), size: [50, 22], io: [1, ["", "bang"]], extra: { parameter_enable: 0, format: 6 } },
+    "number~": { make: (p, b, a) => new NumberSig(p, b, a), size: [56, 22], io: [2, ["signal", "float"]], extra: { mode: 2, sig: 0 } },
     "toggle": { make: (p, b, a) => new Toggle(p, b, a), size: [24, 24], io: [1, ["int"]], extra: { parameter_enable: 0 } },
     "button": { make: (p, b, a) => new Button(p, b, a), size: [24, 24], io: [1, ["bang"]], extra: { parameter_enable: 0 } },
     "slider": { make: (p, b, a) => new Slider(p, b, a), size: [20, 140], io: [1, [""]], extra: { parameter_enable: 0 } },

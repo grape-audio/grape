@@ -110,6 +110,32 @@ class Shape extends Base {
   }
 }
 class Saw extends Shape { constructor(o) { super(o); this.kind = "saw"; } }
+
+// ------------------------------------------------------------ scope~ history
+// Sends one input sample every `step`, in chunks of 256 values. Without an
+// input it sends zeros, so the timeline keeps going.
+class Tap extends Base {
+  constructor(o) {
+    super(o);
+    this.k = 0;
+    this.n = 0;
+    this.buf = new Float32Array(256);
+  }
+  process(inputs, outputs) {
+    const x = sig(inputs, 0), len = outputs[0][0].length, step = Math.max(1, this.p.step || 4);
+    for (let i = 0; i < len; i++) {
+      if (++this.k < step) continue;
+      this.k = 0;
+      this.buf[this.n++] = x ? x[i] : 0;
+      if (this.n === this.buf.length) {
+        this.port.postMessage(this.buf);
+        this.buf = new Float32Array(256);
+        this.n = 0;
+      }
+    }
+    return this.alive;
+  }
+}
 class Rect extends Shape { constructor(o) { super(o); this.kind = "rect"; } }
 class Tri extends Shape { constructor(o) { super(o); this.kind = "tri"; } }
 
@@ -1322,6 +1348,7 @@ class SfRecord extends Base {
 }
 
 registerProcessor("pe-cycle", Cycle);
+registerProcessor("pe-tap", Tap);
 registerProcessor("pe-saw", Saw);
 registerProcessor("pe-rect", Rect);
 registerProcessor("pe-tri", Tri);

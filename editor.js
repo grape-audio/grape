@@ -420,6 +420,8 @@
     return "k-gui";
   }
 
+  // Text boxes change only their width when resized, as in Max.
+  const WIDTH_ONLY = new Set(["newobj", "message", "comment", "number", "flonum", "number~"]);
   function renderBox(e) {
     const b = e.box, inst = e.inst, r = rectOf(e);
     let el = els.get(b.id);
@@ -446,12 +448,12 @@
       el.style.minHeight = r[3] + "px";
     } else if (b.maxclass === "panel") {
       el.style.background = rgba(b.bgcolor);
-      const h = document.createElement("div");
-      h.className = "rsz";
-      el.append(h);
     } else {
       inst.build(el);
     }
+    const h = document.createElement("div");
+    h.className = WIDTH_ONLY.has(b.maxclass) ? "rsz rsz-w" : "rsz";
+    el.append(h);
     const n = inst.nin, outs = inst.outTypes;
     for (let k = 0; k < n; k++) {
       const d = document.createElement("div");
@@ -669,6 +671,12 @@
       fitWidth(entry);
     }
     patch.rebuild(b.id);
+    // a new or edited object gets enough width to keep its inlets and outlets apart
+    const made = patch.entries.get(b.id).inst;
+    if (b.maxclass === "newobj" && !made.bad) {
+      const n = Math.max(made.nin, made.outTypes.length);
+      b.patching_rect[2] = Math.max(b.patching_rect[2], n * IOW + (n - 1) * 10);
+    }
     if (patch.entries.get(b.id).inst.bad && b.maxclass === "newobj") log(`${word}: oggetto non disponibile qui (vedi ? per l'elenco)`);
     renderBox(patch.entries.get(b.id));
     renderCords();
@@ -1059,19 +1067,24 @@
     });
   }
 
-  // Drag the corner handle of a selected panel to change its size.
+  // Drag the corner handle of a selected box to change its size. The box is
+  // drawn again at each step, in the same place among the others.
   function startResize(ev, id, pt0) {
-    const e = patch.entries.get(id), r = rectOf(e), el = els.get(id);
-    const w0 = r[2], h0 = r[3];
+    const e = patch.entries.get(id), r = rectOf(e);
+    const w0 = r[2], h0 = r[3], widthOnly = WIDTH_ONLY.has(e.box.maxclass);
     let moved = false;
     startDrag(ev, {
       move(e2, pt) {
         const dw = Math.round(pt.x - pt0.x), dh = Math.round(pt.y - pt0.y);
         if (!moved && Math.abs(dw) + Math.abs(dh) < 2) return;
         if (!moved) { pushUndo(); moved = true; }
-        r[2] = Math.max(16, w0 + dw); r[3] = Math.max(16, h0 + dh);
-        el.style.width = r[2] + "px"; el.style.height = r[3] + "px";
+        r[2] = Math.max(16, w0 + dw);
+        if (!widthOnly) r[3] = Math.max(16, h0 + dh);
+        const next = els.get(id).nextSibling;
+        renderBox(e);
+        canvas.insertBefore(els.get(id), next);
         renderCords();
+        updateAssist();
       },
       up() { if (moved) { applyZoom(); scheduleAutosave(); } },
     });

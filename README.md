@@ -51,7 +51,6 @@ then open http://localhost:8000/
 - `editor.js`: the patch editor
 - `engine.js`: the objects
 - `worklet.js`: the audio processors
-- `example.js`: the example patch
 - `mp3.js`, `lame.min.js`: MP3 recording
 - `patches/`: patches opened by link
 

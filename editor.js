@@ -1316,7 +1316,6 @@
   });
   $("#file").addEventListener("click", () => { $("#f-openpres").checked = !!patch.header.openinpresentation; $("#f-name").value = patchName; fileMsg(""); refreshFiles(); $("#filedlg").hidden = false; });
   $("#f-new").addEventListener("click", () => { openPatch({ patcher: { boxes: [], lines: [] } }, "nuova patch"); setLocked(false); closeDialogs(); });
-  $("#f-example").addEventListener("click", () => { openPatch(window.EXAMPLE_PATCH, "simple_monoSynth"); setLocked(true); closeDialogs(); log(EXAMPLE_HINT); });
   $("#f-save").addEventListener("click", () => {
     const n = $("#f-name").value.trim();
     if (!n) { fileMsg("Scrivi un nome per la patch."); return; }
@@ -1420,18 +1419,19 @@
       } catch (e) { json = null; }
     }
     if (linked) history.replaceState(null, "", location.pathname);
-    const reopen = !!(saved && saved.json && saved.json.patcher);
+    const reopen = !!(saved && saved.json && saved.json.patcher)
+      && !(saved.name === "simple_monoSynth" && !saved.edited);
     if (json && json.patcher) { note = keepUnsaved(saved); openPatch(json, linkName); }
     else {
       if (linked) note = `Non trovo la patch \u201c${linked}\u201d di questo link.`;
       if (reopen) { openPatch(saved.json, saved.name || "patch"); edited = saved.edited ?? saved.name !== "simple_monoSynth"; }
-      else openPatch(window.EXAMPLE_PATCH, "simple_monoSynth");
+      else openPatch({ patcher: { boxes: [], lines: [] } }, "nuova patch");
     }
     setLocked(true);
     requestAnimationFrame(tick);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { renderAll(); });
     if (!full) log("Attenzione: questo browser non carica l'audio completo (niente modulazione di fase).");
-    log(note || (json || reopen ? "Premi ? per l'aiuto." : EXAMPLE_HINT));
+    log(note || "Premi ? per l'aiuto.");
   });
   window.__patcher = { patch, setLocked, openPatch, newBox, get zoom() { return zoom; } };
 })();

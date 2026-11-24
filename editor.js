@@ -961,7 +961,7 @@
       }
       if (locked) return;
       ev.preventDefault();
-      if (outEl) { startCord(ev, id, Number(outEl.dataset.o)); return; }
+      if (outEl) { startCord(ev, id, nearestOutlet(e, pt)); return; }
       if (ev.target.closest(".rsz")) { startResize(ev, id, pt); return; }
       const dbl = isDoubleTap(ev, id);
       // a panel is background: a tap inside it also sets where new objects go
@@ -1088,6 +1088,18 @@
       },
       up() { if (moved) { applyZoom(); scheduleAutosave(); } },
     });
+  }
+
+  // The hit areas of close outlets overlap, and the element on top would win:
+  // take the outlet whose centre is nearest to the pointer instead.
+  function nearestOutlet(e, pt) {
+    const r = rectOf(e), n = e.inst.outTypes.length;
+    let best = 0, bestD = Infinity;
+    for (let k = 0; k < n; k++) {
+      const d = Math.abs(pt.x - ioX(r, k, n));
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    return best;
   }
 
   function startCord(ev, id, o) {

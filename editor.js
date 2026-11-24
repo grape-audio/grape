@@ -759,8 +759,11 @@
   const QUIET = new Set(["panel", "comment"]); // nothing useful to say
   let assistSel = null, assistFocus = null;
   // the Info button turns all of this on and off (remembered in this browser)
-  let assistOn = store.get(KEY_INFO, true) !== false;
+  // Test mode: Info stays off and its button is hidden. Set to false to bring it back.
+  const INFO_DISABLED = true;
+  let assistOn = !INFO_DISABLED && store.get(KEY_INFO, true) !== false;
   const infoBtn = $("#info");
+  if (INFO_DISABLED) infoBtn.style.display = "none";
   function showInfoButton() { infoBtn.classList.toggle("on", assistOn); infoBtn.setAttribute("aria-pressed", String(assistOn)); }
   showInfoButton();
   infoBtn.addEventListener("click", () => { assistOn = !assistOn; store.set(KEY_INFO, assistOn); showInfoButton(); updateAssist(); });
